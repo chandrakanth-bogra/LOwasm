@@ -909,7 +909,19 @@ AC_SUBST(ENABLE_ANDROIDAPP)
 AM_CONDITIONAL([ENABLE_ANDROIDAPP], [test "$ENABLE_ANDROIDAPP" = "true"])
 AC_SUBST(ANDROID_PACKAGE_NAME)
 
-APP_NAME="Collabora Online Development Edition"
+dnl LOWASM: the default below is not overridable with --with-app-name="" --
+dnl AC_ARG_WITH sets with_app_name to a literal empty string, and
+dnl `test -n ""` is false, so the guard silently falls through to the
+dnl default instead of clearing it (confirmed: -DMOBILEAPPNAME="Collabora
+dnl Online Development Edition" still appeared in a build passing that flag).
+dnl For our WASM app there is no vendor identity to show, so key the default
+dnl itself on $host_os = emscripten -- the same test AC_SUBST(ENABLE_EMSCRIPTENAPP)
+dnl uses below -- rather than relying on the flag.
+if test "$host_os" = "emscripten"; then
+   APP_NAME=""
+else
+   APP_NAME="Collabora Online Development Edition"
+fi
 if test -n "$with_app_name"; then
    APP_NAME="$with_app_name"
 fi

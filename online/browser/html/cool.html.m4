@@ -54,12 +54,25 @@ m4_ifelse(MOBILEAPP, [true],
 ]
 )
 
-<input type="hidden" id="init-product-branding-name" value="%PRODUCT_BRANDING_NAME%" />
+m4_dnl# LOWASM: %PLACEHOLDER% values are normally filled in by coolwsd's own
+m4_dnl# FileServer.cpp at request time (see updateVarsForCssFiles /
+m4_dnl# preprocessFile there, which fall back to empty when unconfigured -- the
+m4_dnl# same default we hardcode here). The Emscripten build serves this file
+m4_dnl# statically instead, so that substitution never runs and the literal
+m4_dnl# "%...%" text would otherwise reach the browser. Scoped to EMSCRIPTENAPP
+m4_dnl# only: a normal server build still gets real branding via FileServer.
+m4_ifelse(EMSCRIPTENAPP, [true],
+[<input type="hidden" id="init-product-branding-name" value="" />
+<input type="hidden" id="init-product-branding-url" value="" />
+<input type="hidden" id="init-logo-url" value="" />],
+[<input type="hidden" id="init-product-branding-name" value="%PRODUCT_BRANDING_NAME%" />
 <input type="hidden" id="init-product-branding-url" value="%PRODUCT_BRANDING_URL%" />
-<input type="hidden" id="init-logo-url" value="%LOGO_URL%" />
+<input type="hidden" id="init-logo-url" value="%LOGO_URL%" />])
 
 <input type="hidden" id="init-uri-prefix" value="m4_ifelse(MOBILEAPP, [], [%SERVICE_ROOT%/browser/%VERSION%/])" />
-<input type="hidden" id="init-branding-name" value="%BRANDING_THEME%" />
+m4_ifelse(EMSCRIPTENAPP, [true],
+[<input type="hidden" id="init-branding-name" value="" />],
+[<input type="hidden" id="init-branding-name" value="%BRANDING_THEME%" />])
 
 m4_dnl# For use in conditionals in JS:
 m4_ifelse(IOSAPP, [true], [<input type="hidden" id="init-mobile-app-os-type" value="IOS" />])
@@ -214,7 +227,11 @@ m4_ifelse(MOBILEAPP,[true],
       <div id="about-dialog" tabIndex="0">
         <div id="about-dialog-header">
           <fig id="integrator-logo"></fig>
-          <h1 id="product-name">Collabora Online</h1>
+          m4_dnl# LOWASM: default text is a visible product name in the About
+          m4_dnl# dialog. A real FileServer.cpp-served deployment overwrites
+          m4_dnl# this at runtime (updateThemeResources); we serve statically,
+          m4_dnl# so it would otherwise always show "Collabora Online".
+          m4_ifelse(EMSCRIPTENAPP, [true], [<h1 id="product-name"></h1>], [<h1 id="product-name">Collabora Online</h1>])
         </div>
         <hr/>
         <div id="about-dialog-container">
