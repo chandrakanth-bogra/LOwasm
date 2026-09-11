@@ -15,6 +15,14 @@
 
 source "$LOWASM_ROOT/scripts/config.sh"
 
+# online/ and core/ are plain source trees here, not git checkouts. Stop git
+# discovery at the LOwasm checkout so the vendored build systems cannot find
+# LOwasm's .git: online/autogen.sh otherwise symlinks Collabora's development
+# hooks (mandatory Signed-off-by, a formatting pre-commit) into it, and every
+# later commit to LOwasm is rejected. With no repository found they take their
+# own "tarball build" paths, which is what these trees are.
+export GIT_CEILING_DIRECTORIES=$LOWASM_ROOT
+
 export HOME=${HOME:-/tmp}
 git config --global --add safe.directory /home/builder/emsdk/emscripten/main 2>/dev/null || true
 export EM_CACHE=$EMCACHE
