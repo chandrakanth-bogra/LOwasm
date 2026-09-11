@@ -17,13 +17,20 @@
 #include <Log.hpp>
 #include <COOLWSD.hpp>
 #include <Util.hpp>
+#include <common/SigUtil.hpp>
 
 #include <emscripten/fetch.h>
+#include <unistd.h>
 
 #include <cassert>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
 
 int coolwsd_server_socket_fd = -1;
 
@@ -32,6 +39,44 @@ static std::string remoteUrl;
 static std::string fileURL;
 static int fakeClientFd;
 static int closeNotificationPipeForForwardingThread[2] = {-1, -1};
+
+// LOWASM: one warm engine, many documents, opened one at a time.
+//
+// Upstream boots the module, fetches exactly one document and runs COOLWSD once
+// -- so a second document meant a second module instance, paying the ~2-3s wasm
+// compile, the ~2.2s MEMFS unpack and the LO bootstrap again. Instead we follow
+// the Android app (android/lib/src/main/cpp/androidapp.cpp): keep the module and
+// its filesystem alive and re-run COOLWSD per document.
+//
+// What makes this cheap is that the expensive LibreOffice state is already
+// cached across runs -- kit/Kit.cpp holds `kit`/`loKit` in function-local
+// statics, so lok_init_2() runs once however many times lokit_main does.
+//
+// Held while COOLWSD::run() is on the engine thread; closeDocument() acquires it
+// to wait for that run to finish.
+static std::mutex coolwsdRunningMutex;
+
+/// Where a document's bytes come from. Parsed once at the JS boundary so the
+/// engine thread never has to re-test a string.
+enum class DocKind
+{
+    Server, ///< fetched through the /cowasm-wopi/ service worker
+    Local ///< already present in the Emscripten filesystem
+};
+
+struct PendingDocument
+{
+    DocKind kind;
+    std::string desc;
+};
+
+// The next document to open. Written from the JS thread by cool_load_document,
+// read by the engine thread, so it needs the mutex -- the Android equivalent
+// assigns its fileURL unsynchronised and gets away with it. The optional is the
+// "is one waiting" flag; there is nothing else to keep in sync with it.
+static std::mutex pendingMutex;
+static std::condition_variable pendingCv;
+static std::optional<PendingDocument> pendingDocument;
 
 static void send2JS(const std::vector<char>& buffer)
 {
@@ -63,6 +108,13 @@ void handle_cool_message(const char *string_value)
 {
     LOG_DBG("handle_cool_message(): '" << string_value << '\'');
 
+    // LOWASM: snapshot the fd for this document. The global is reassigned by the
+    // engine loop on the next open, and a forwarding thread from the previous
+    // document may not have exited yet -- if it read the global it would poll
+    // and write the *new* document's socket. That misroutes tiles rather than
+    // failing outright, so it is worth the copy. Matches androidapp.cpp:155.
+    const int currentFakeClientFd = fakeClientFd;
+
     if (strcmp(string_value, "HULLO") == 0)
     {
         // Now we know that the JS has started completely
@@ -70,20 +122,20 @@ void handle_cool_message(const char *string_value)
         // Contact the permanently (during app lifetime) listening COOLWSD server
         // "public" socket
         assert(coolwsd_server_socket_fd != -1);
-        int rc = fakeSocketConnect(fakeClientFd, coolwsd_server_socket_fd);
+        int rc = fakeSocketConnect(currentFakeClientFd, coolwsd_server_socket_fd);
         assert(rc != -1);
 
         // Create a socket pair to notify the below thread when the document has been closed
         fakeSocketPipe2(closeNotificationPipeForForwardingThread);
 
         // Start another thread to read responses and forward them to the JavaScript
-        std::thread([]
+        std::thread([currentFakeClientFd]
                     {
                         Util::setThreadName("app2js");
                         while (true)
                         {
                            struct pollfd pollfd[2];
-                           pollfd[0].fd = fakeClientFd;
+                           pollfd[0].fd = currentFakeClientFd;
                            pollfd[0].events = POLLIN;
                            pollfd[1].fd = closeNotificationPipeForForwardingThread[1];
                            pollfd[1].events = POLLIN;
@@ -101,17 +153,17 @@ void handle_cool_message(const char *string_value)
 
                                    // Close our end of the fake socket connection to the
                                    // ClientSession thread, so that it terminates
-                                   fakeSocketClose(fakeClientFd);
+                                   fakeSocketClose(currentFakeClientFd);
 
                                    return;
                                }
                                if (pollfd[0].revents == POLLIN)
                                {
-                                   int n = fakeSocketAvailableDataLength(fakeClientFd);
+                                   int n = fakeSocketAvailableDataLength(currentFakeClientFd);
                                    if (n == 0)
                                        return;
                                    std::vector<char> buf(n);
-                                   n = fakeSocketRead(fakeClientFd, buf.data(), n);
+                                   n = fakeSocketRead(currentFakeClientFd, buf.data(), n);
                                    send2JS(buf);
                                }
                            }
@@ -126,7 +178,7 @@ void handle_cool_message(const char *string_value)
         LOG_TRC_NOFILE("Actually sending to Online:" << fileURL);
         LOG_DBG("Loading file [" << fileURL << ']');
 
-        fakeSocketWriteQueue(fakeClientFd, fileURL.c_str(), fileURL.size());
+        fakeSocketWriteQueue(currentFakeClientFd, fileURL.c_str(), fileURL.size());
     }
     else if (strcmp(string_value, "BYE") == 0)
     {
@@ -137,7 +189,7 @@ void handle_cool_message(const char *string_value)
     }
     else
     {
-        fakeSocketWriteQueue(fakeClientFd, string_value, strlen(string_value));
+        fakeSocketWriteQueue(currentFakeClientFd, string_value, strlen(string_value));
     }
 }
 
@@ -190,6 +242,200 @@ void saveToServer() {
     //TODO: handle fetch->status != 200
 }
 
+// LOWASM: tell JS a document could not be fetched. Before warm reuse this path
+// was std::exit(EXIT_FAILURE), which was survivable only because the instance
+// was being thrown away with the document. Now the instance is shared, so one
+// bad URL must not take the engine and every later document down with it.
+static void reportLoadFailure(const std::string& url, int status)
+{
+    // The message itself is LOG_ERR'd above, and global.js always installs a
+    // coolDocumentLoadFailed default, so there is deliberately no fallback
+    // message here -- a second copy would only drift from the JS one.
+    LOG_ERR("Downloading " << url << " failed, HTTP failure status code: " << status);
+    MAIN_THREAD_EM_ASM({
+        if (typeof globalThis.coolDocumentLoadFailed === 'function')
+            globalThis.coolDocumentLoadFailed(UTF8ToString($0), $1);
+    }, url.c_str(), status);
+}
+
+/// Fetch the requested document into the Emscripten filesystem and point
+/// fileURL at it. Returns false if the document could not be obtained, in which
+/// case the engine stays up and simply waits for the next request.
+static bool prepareDocument(const PendingDocument& doc)
+{
+    // The module now outlives the document, so the previous one's bytes would
+    // otherwise sit in MEMFS for the life of the tab. (A server->server swap
+    // truncates via fopen "w"; a swap to a local document would not.)
+    unlink("/tempdoc");
+    tempFile = nullptr;
+
+    if (doc.kind == DocKind::Local)
+    {
+        fileURL = doc.desc;
+        return true;
+    }
+
+    // LOWASM: served by our service worker, whose scope is /cowasm-wopi/ --
+    // deliberately not the whole origin, so the worker cannot intercept the rest
+    // of the SPA. The same URL is reused by saveToServer() for the write-back POST.
+    remoteUrl = "/cowasm-wopi/wasm/" + doc.desc;
+
+    LOG_DBG("Fetching from url " << remoteUrl);
+
+    emscripten_fetch_attr_t attr;
+    emscripten_fetch_attr_init(&attr);
+    strcpy(attr.requestMethod, "GET");
+    attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_SYNCHRONOUS;
+    emscripten_fetch_t* fetch =
+        emscripten_fetch(&attr, remoteUrl.data()); // Blocks here until the operation is complete.
+
+    if (fetch->status != 200)
+    {
+        const int status = fetch->status;
+        emscripten_fetch_close(fetch);
+        reportLoadFailure(remoteUrl, status);
+        return false;
+    }
+
+    LOG_DBG("Finished downloading " << fetch->numBytes << " bytes from URL " << fetch->url);
+    tempFile = "/tempdoc";
+    FILE* f = fopen(tempFile, "w");
+    const int wrote = fwrite(fetch->data, 1, fetch->numBytes, f);
+    fclose(f);
+    LOG_DBG("Wrote " << wrote << " bytes into " << tempFile);
+    fileURL = std::string("file://") + tempFile;
+
+    emscripten_fetch_close(fetch);
+    return true;
+}
+
+/// Close the current document and wait for the kit and COOLWSD to finish.
+///
+/// lokit_main holds COOLWSD::lokit_main_mutex for its whole life (COOLWSD.cpp),
+/// and the engine loop holds coolwsdRunningMutex around COOLWSD::run(), so
+/// acquiring both is a real barrier rather than a hopeful sleep.
+static void closeDocument()
+{
+    fakeSocketClose(closeNotificationPipeForForwardingThread[0]);
+
+    {
+        // Scoped: we only want to know lokit_main has returned. Holding this
+        // while waiting on coolwsdRunningMutex below would deadlock the next
+        // run(), whose lokit_main thread takes this same mutex on entry.
+        // Android holds both at once and gets away with it because its close is
+        // terminal; ours is not.
+        std::unique_lock<std::mutex> lokitLock(COOLWSD::lokit_main_mutex);
+    }
+
+    // LOWASM: upstream's close path does not do this, because upstream never
+    // reuses the instance -- the tab was going away with the document. Two
+    // separate loops have to be told to stop, and they read *different* flags:
+    //
+    //   COOLWSD::run()          while (!SigUtil::getShutdownRequestFlag())   >= ShutDown
+    //   DocumentBroker::poll()  while (... && !SigUtil::getTerminationFlag()) >= Terminate
+    //
+    // requestShutdown() only raises the flag to ShutDown. That releases run()'s
+    // poll loop but leaves the broker polling, so run() then blocks forever in
+    // the unbounded docBroker->joinThread() during its shutdown sequence
+    // (COOLWSD.cpp). Verified: with requestShutdown() the swap still hung at
+    // 150s, having got past the bounded 30s DocBroker wait.
+    //
+    // setTerminationFlag() raises it to Terminate, which satisfies both
+    // predicates. It is also exactly what the kit raises on the 'exit' command
+    // (kit/KitWebSocket.cpp), so this is upstream's own stop signal, not a new
+    // one. Skipping the graceful save is fine here and only here: the viewer is
+    // read-only, and the kit has already finished by this point.
+    //
+    // COOLWSD::main() calls resetTerminationFlags() on entry, so the next run
+    // starts from RunState::Run.
+    SigUtil::setTerminationFlag();
+
+    std::unique_lock<std::mutex> coolwsdLock(coolwsdRunningMutex);
+}
+
+static void engineLoop()
+{
+    Util::setThreadName("COOLWSD::run");
+
+    char* argv[2];
+    argv[0] = strdup("wasm");
+    argv[1] = nullptr;
+
+    while (true)
+    {
+        PendingDocument doc;
+        {
+            std::unique_lock<std::mutex> lock(pendingMutex);
+            pendingCv.wait(lock, [] { return pendingDocument.has_value(); });
+            doc = std::move(*pendingDocument);
+            pendingDocument.reset();
+        }
+
+        if (!prepareDocument(doc))
+            continue; // engine stays warm; wait for the next request
+
+        {
+            std::unique_lock<std::mutex> lock(coolwsdRunningMutex);
+
+            // Created here, not in main(), so each document gets a fresh client
+            // socket. Safe despite JS being live already: the Emscripten build
+            // never posts HULLO from JS (global.js gates it on
+            // !ThisIsTheEmscriptenApp) -- COOLWSD::run() calls
+            // handle_cool_message("HULLO") itself once its server socket is up,
+            // by which point this fd exists.
+            fakeClientFd = fakeSocketSocket();
+
+            COOLWSD* coolwsd = new COOLWSD();
+            coolwsd->run(1, argv);
+            delete coolwsd;
+        }
+
+        // No throttle here, deliberately, unlike androidapp.cpp's copy of this
+        // loop: that one re-enters run() immediately and sleeps to avoid a tight
+        // spin, whereas this one blocks on pendingCv at the top. A sleep would
+        // just add 100ms to the swap latency this whole mechanism exists to cut.
+        LOG_DBG("One run of COOLWSD completed");
+    }
+}
+
+/// Open a document on the warm engine, starting the engine on first use.
+/// Safe to call from JS at any time; returns without blocking.
+extern "C" void cool_load_document(const char* kind, const char* desc)
+{
+    LOG_DBG("cool_load_document(" << kind << ", " << desc << ')');
+
+    // Rejected here rather than queued: a bad kind from the host page should not
+    // cost a teardown of the document currently on screen.
+    if (strcmp(kind, "server") != 0 && strcmp(kind, "local") != 0)
+    {
+        LOG_ERR("Unknown document kind [" << kind << ']');
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(pendingMutex);
+        pendingDocument = PendingDocument{
+            strcmp(kind, "local") == 0 ? DocKind::Local : DocKind::Server, desc
+        };
+    }
+    pendingCv.notify_one();
+
+    // Only ever touched from the browser's main thread, which is the only caller
+    // of this function (main() and the ccall from global.js are both on it).
+    static bool engineStarted = false;
+    if (!engineStarted)
+    {
+        engineStarted = true;
+        std::thread(engineLoop).detach();
+        return;
+    }
+
+    // A document is already open. Tear it down; the loop then picks up the
+    // request queued above. Done on its own thread so the caller -- the browser's
+    // main thread -- is not blocked on the teardown wait.
+    std::thread(closeDocument).detach();
+}
+
 int main(int argc, char* argv_main[])
 {
     assert(argc == 3);
@@ -202,70 +448,7 @@ int main(int argc, char* argv_main[])
                                      LOG_TRC_NOFILE(line);
                                  });
 
-    char *argv[2];
-    argv[0] = strdup("wasm");
-    argv[1] = nullptr;
-
-    fakeClientFd = fakeSocketSocket();
-
-    // We run COOOLWSD::run() in a thread of its own so that main() can return.
-    std::thread(
-        [&]
-        {
-            Util::setThreadName("COOLWSD::run");
-
-            const std::string docKind = std::string(argv_main[1]);
-            const std::string docDesc = std::string(argv_main[2]);
-
-            if (docKind == "server")
-            {
-                // LOWASM: served by our service worker, whose scope is
-                // /cowasm-wopi/ -- deliberately not the whole origin, so the
-                // worker cannot intercept the rest of the SPA. The same URL is
-                // reused by saveToServer() for the write-back POST.
-                remoteUrl = "/cowasm-wopi/wasm/" + docDesc;
-
-                LOG_DBG("Fetching from url " << remoteUrl);
-
-                emscripten_fetch_attr_t attr;
-                emscripten_fetch_attr_init(&attr);
-                strcpy(attr.requestMethod, "GET");
-                attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_SYNCHRONOUS;
-                emscripten_fetch_t* fetch = emscripten_fetch(
-                    &attr, remoteUrl.data()); // Blocks here until the operation is complete.
-                if (fetch->status == 200)
-                {
-                    LOG_DBG("Finished downloading " << fetch->numBytes << " bytes from URL "
-                            << fetch->url);
-                    tempFile = "/tempdoc";
-                    FILE* f = fopen(tempFile, "w");
-                    const int wrote = fwrite(fetch->data, 1, fetch->numBytes, f);
-                    fclose(f);
-                    LOG_DBG("Wrote " << wrote << " bytes into " << tempFile);
-                    fileURL = std::string("file://") + tempFile;
-                }
-                else
-                {
-                    LOG_ERR("Downloading " << fetch->url << " failed, HTTP failure status code: "
-                            << fetch->status);
-                    std::exit(EXIT_FAILURE); //TODO: error handling
-                }
-                emscripten_fetch_close(fetch);
-            }
-            else if (docKind == "local")
-            {
-                fileURL = docDesc;
-            }
-            else
-            {
-                assert(false);
-            }
-
-            COOLWSD *coolwsd = new COOLWSD();
-            coolwsd->run(1, argv);
-            delete coolwsd;
-        })
-        .detach();
+    cool_load_document(argv_main[1], argv_main[2]);
 
     return 0;
 }

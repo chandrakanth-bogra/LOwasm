@@ -961,7 +961,26 @@ class Socket {
 			return;
 		}
 
-		if (!this._map._docLayer) {
+		// LOWASM: warm engine reuse (wasm/wasmapp.cpp) swaps the document under a
+		// live map, which reaches this handler looking exactly like a reconnect --
+		// so the reconnect branch below would keep the previous document's layer
+		// and a .ods opened over a .docx would paint nothing into a Writer layer.
+		// Take the construct path instead when the type actually changed, so the
+		// layer, text input and notebookbar are rebuilt for the new type.
+		const docTypeChanged =
+			!!this._map._docLayer && this._map._docLayer._docType !== command.type;
+		if (docTypeChanged) {
+			window.app.console.debug(
+				'_onStatusMsg: document type changed ' +
+					this._map._docLayer._docType +
+					' -> ' +
+					command.type +
+					', rebuilding the doc layer',
+			);
+			this._map.removeLayer(this._map._docLayer);
+		}
+
+		if (!this._map._docLayer || docTypeChanged) {
 			Util.ensureValue(command.type);
 			// initialize and append text input before doc layer
 			this._map.initTextInput(command.type);

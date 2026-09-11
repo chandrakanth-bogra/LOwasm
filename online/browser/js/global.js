@@ -521,6 +521,37 @@ class EMSCRIPTENAppInitializer extends MobileAppInitializer {
 		window.postMobileError   = function(msg) { window.app.console.error('COOL Error: ' + msg); };
 		window.postMobileDebug   = function(msg) { window.app.console.log('COOL Debug: ' + msg); };
 
+		// LOWASM: open another document on the same warm engine, instead of
+		// tearing down the module and paying the wasm compile + MEMFS unpack
+		// again. See wasm/wasmapp.cpp. `kind` is 'server' (fetched through the
+		// /cowasm-wopi/ service worker) or 'local' (already in the Emscripten FS).
+		// ccall, not _cool_load_document, so the argument strings are freed for us.
+		window.coolLoadDocument = function(desc, kind) {
+			// Only the load flag is cleared here. Rebuilding the document layer
+			// for the new type is done in Socket.ts's status handler, where the
+			// new type is actually known -- tearing it down from out here leaves
+			// _docLayer null while the previous document's handlers are still
+			// running, which throws on _docType.
+			//
+			// Fired as an event rather than assigned: Map.js's docloaded handler
+			// sets _docLoaded and does the associated cleanup, which a direct
+			// assignment would skip.
+			var map = window.L && window.L.Map && window.L.Map.THIS;
+			if (map)
+				map.fire('docloaded', { status: false });
+
+			Module.ccall('cool_load_document', null, ['string', 'string'],
+				[kind || 'server', desc]);
+		};
+
+		// Overridable by the host page; the engine calls this instead of exiting
+		// when a document cannot be fetched, so one bad URL does not kill it.
+		if (typeof window.coolDocumentLoadFailed !== 'function') {
+			window.coolDocumentLoadFailed = function(url, status) {
+				window.app.console.error('COOL: failed to load ' + url + ' (HTTP ' + status + ')');
+			};
+		}
+
 		window.userInterfaceMode = 'notebookbar';
 	}
 }

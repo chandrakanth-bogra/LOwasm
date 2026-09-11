@@ -20,6 +20,11 @@ extern int coolwsd_server_socket_fd;
 
 extern "C" void handle_cool_message(const char *string_value);
 
+/// LOWASM: open a document on the warm engine (see wasmapp.cpp). Starts the
+/// engine on first call; afterwards closes the current document and opens the
+/// requested one on the same module instance. `kind` is "server" or "local".
+extern "C" void cool_load_document(const char *kind, const char *desc);
+
 void saveToServer();
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab cinoptions=b1,g0,N-s cinkeys+=0=break: */

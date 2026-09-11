@@ -4199,7 +4199,19 @@ void COOLWSD::innerMain()
     if constexpr (Util::isMobileApp())
     {
         LOG_INF("Process [coolwsd] finished with exit status: " << EXIT_OK);
+#if defined __EMSCRIPTEN__
+        // LOWASM: warm engine reuse -- return instead of exiting, so the loop in
+        // wasm/wasmapp.cpp can run COOLWSD again for the next document without
+        // rebuilding the module.
+        //
+        // forcedExit() ends in std::_Exit(), which under EXIT_RUNTIME=0 does not
+        // tear the tab down -- it just strands this thread. The teardown before
+        // it is clean (DocumentBroker destroyed, sockets closed, tile cache
+        // freed), so the only thing this call was achieving here was leaving
+        // coolwsdRunningMutex held forever and hanging every subsequent open.
+#else
         Util::forcedExit(EXIT_OK);
+#endif
     }
 
 #endif // !IOS
