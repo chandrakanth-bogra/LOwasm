@@ -1,0 +1,9 @@
+# We only directly edit toolbar.js in dist/
+**/js/Autolinker.js
+**/js/select2.js
+**/js/sanitize-url.js
+**/js/l10n.js
+**/src/unocommands.js
+**/src/app/TaskWorker.js
+node_modules
+dist/src
