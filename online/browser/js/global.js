@@ -512,6 +512,11 @@ class EMSCRIPTENAppInitializer extends MobileAppInitializer {
 		super();
 
 		window.ThisIsTheEmscriptenApp = true;
+
+		// LOWASM: cache the WASM payload for return visits (see cool-payload-sw.js).
+		if ('serviceWorker' in navigator)
+			navigator.serviceWorker.register('cool-payload-sw.js').catch(function() {});
+
 		window.postMobileMessage = function(msg) { Module._handle_cool_message(Module.stringToNewUTF8(msg)); };
 		window.postMobileError   = function(msg) { window.app.console.error('COOL Error: ' + msg); };
 		window.postMobileDebug   = function(msg) { window.app.console.log('COOL Debug: ' + msg); };
