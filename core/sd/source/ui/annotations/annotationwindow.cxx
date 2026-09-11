@@ -17,6 +17,8 @@
  *   the License at http://www.apache.org/licenses/LICENSE-2.0 .
  */
 
+#include <config_wasm_strip.h>
+
 #include <editeng/eeitem.hxx>
 #include <editeng/udlnitem.hxx>
 #include <editeng/langitem.hxx>
@@ -207,7 +209,14 @@ void AnnotationTextWindow::SetDrawingArea(weld::DrawingArea* pDrawingArea)
 
     pDrawingArea->set_cursor(PointerStyle::Text);
 
+    // AISPEC: guard as sw/source/uibase/docvw/SidebarTxtControl.cxx already does.
+    // WeldEditView::InitAccessible() is defined only when accessibility is kept
+    // (svx/source/dialog/weldeditview.cxx), so an unguarded call fails to link
+    // once sd is built with --enable-wasm-strip. Upstream never hits this
+    // because sd is stripped in every WASM configuration.
+#if !ENABLE_WASM_STRIP_ACCESSIBILITY
     InitAccessible();
+#endif
 }
 
 // see SwAnnotationWin in sw for something similar

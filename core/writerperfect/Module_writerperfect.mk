@@ -19,11 +19,17 @@
 
 $(eval $(call gb_Module_Module,writerperfect))
 
+# AISPEC: wpftdraw/wpftimpress are gated on their externals rather than on the
+# Impress strip flag. wpftdraw needs cdr/freehand/mspub/zmf/pagemaker/qxp/visio
+# and wpftimpress needs etonyek -- all legacy import formats, none of them ODF
+# or OOXML. --enable-wasm-strip sets test_lib<x>=no for every one of them, so
+# re-enabling Impress via the strip flag alone pulls in libraries whose tarballs
+# were never fetched ("depend(s) on package libetonyek which does not exist").
+# Keying off BUILD_TYPE leaves a normal build unchanged, since CDR and ETONYEK
+# are present there.
 $(eval $(call gb_Module_add_targets,writerperfect,\
-    $(if $(ENABLE_WASM_STRIP_BASIC_DRAW_MATH_IMPRESS),, \
-	Library_wpftdraw \
-	Library_wpftimpress \
-    ) \
+	$(if $(filter CDR,$(BUILD_TYPE)),Library_wpftdraw) \
+	$(if $(filter ETONYEK,$(BUILD_TYPE)),Library_wpftimpress) \
 	$(if $(ENABLE_WASM_STRIP_CALC),, \
 	Library_wpftcalc \
 	) \
