@@ -1494,6 +1494,12 @@ gb_emscripten_fs_image_files += \
     $(INSTROOT)/$(LIBO_SHARE_FOLDER)/registry/impress.xcd \
     $(INSTROOT)/$(LIBO_SHARE_FOLDER)/registry/draw.xcd \
     $(INSTROOT)/$(LIBO_SHARE_FOLDER)/registry/math.xcd \
+    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/config/soffice.cfg/simpress/effects.xml \
+    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/config/soffice.cfg/simpress/layoutlist.xml \
+    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/config/soffice.cfg/simpress/objectlist.xml \
+    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/config/soffice.cfg/simpress/styles.xml \
+    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/config/soffice.cfg/simpress/transitions-ogl.xml \
+    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/config/soffice.cfg/simpress/transitions.xml \
     $(INSTROOT)/$(LIBO_SHARE_FOLDER)/config/soffice.cfg/modules/simpress/menubar/menubar.xml \
     $(INSTROOT)/$(LIBO_SHARE_FOLDER)/config/soffice.cfg/modules/simpress/popupmenu/3dobject.xml \
     $(INSTROOT)/$(LIBO_SHARE_FOLDER)/config/soffice.cfg/modules/simpress/popupmenu/3dscene.xml \
