@@ -572,16 +572,16 @@ window.L.Control.NotebookbarWriter = window.L.Control.Notebookbar.extend({
 					} : {}
 		];
 
-		// LOWASM: the WASM build has no server, no forum/online-help/report-issue
-		// URLs to send anyone to, and no vendor identity for an About dialog to
-		// name -- so those items (and their adjacent separators, to avoid a
-		// stray double rule) are dropped rather than hidden with CSS. Filtering
-		// by id here, instead of deleting the entries above, keeps this diff
-		// small against upstream and leaves every id/index the rest of the
-		// notebookbar code refers to unchanged.
+		// LOWASM: the WASM viewer keeps only Keyboard shortcuts and the screen
+		// reading toggle in Help -- the rest need a server/vendor we don't have,
+		// or are authoring tools. Filter by id (adjacent separators too) rather
+		// than editing the array above, to keep the diff small against upstream.
 		if (window.ThisIsTheEmscriptenApp) {
 			var dropIds = ['forum', 'online-help', 'help-onlinehelp-break',
-				'report-an-issue', 'help-reportissue-break', 'about'];
+				'report-an-issue', 'help-reportissue-break', 'about',
+				'accessibility-check', 'validatesidebara11y', 'validatedialogsa11y',
+				'help-accessibility-break', 'server-audit', 'help-serveraudit-break',
+				'latestupdates', 'feedback'];
 			content = content.filter(function(item) {
 				var id = item.id || (item.children && item.children[0] && item.children[0].id);
 				return dropIds.indexOf(id) === -1;

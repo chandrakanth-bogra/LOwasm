@@ -2500,6 +2500,12 @@ class Menubar extends window.L.Control {
 		if (window.ThisIsTheiOSApp && menuItem.iosapp === false) {
 			return false;
 		}
+		// LOWASM: the WASM viewer keeps only Keyboard shortcuts under Help.
+		if (window.ThisIsTheEmscriptenApp &&
+		    ['forum', 'online-help', 'report-an-issue', 'latestupdates',
+		     'feedback', 'serveraudit', 'about'].indexOf(menuItem.id) !== -1) {
+			return false;
+		}
 		if (menuItem.id === 'about' && (window.L.DomUtil.get('about-dialog') === null)) {
 			return false;
 		}
