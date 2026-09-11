@@ -1,0 +1,64 @@
+#!/bin/bash
+# Build Online and turn its browser/dist into a servable payload:
+# rebuild -> blank stray placeholders -> neutral splash styling -> service
+# worker -> optional font subset -> strip debug metadata.
+#
+#   READER=1 finish.sh    font-subset soffice.data for a read-only viewer
+set -uo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
+
+NODE=$NODE_DIR/bin/node
+[ -x "$NODE" ] || die "Node 20 not found at $NODE_DIR -- run scripts/setup.sh first"
+
+echo "=== building Online $(date '+%F %T') ==="
+# Full output to a log, then check the real exit status. Piping the build
+# straight into `tail` discards it ($? is tail's) -- that once let two failed
+# builds print DONE and exit 0 while bundle.js silently stayed stale.
+mkdir -p "$LOWASM_BUILD"
+LOG=$LOWASM_BUILD/build-online.log
+"$LOWASM_ROOT/scripts/build-online.sh" >"$LOG" 2>&1
+rc=$?
+tail -4 "$LOG"
+if [ $rc -ne 0 ]; then
+  echo "FAILED: build exited $rc -- errors from $LOG:"
+  grep -iE "error TS|error:|Error [0-9]+|undefined symbol" "$LOG" | head -20
+  exit 1
+fi
+[ -f "$DIST/online.wasm" ] || die "no online.wasm in $DIST"
+
+echo "=== blanking cool.html placeholders ==="
+# coolwsd's FileServer.cpp fills these in at request time; this payload is
+# served statically, so that never runs. %ACCESS_TOKEN% and friends matter:
+# left literal, main.js folds the text into the fetch URL and every document
+# 404s. The other two are cosmetic but blanked while here.
+sed -i "s/%ACCESS_TOKEN%//g; s/%ACCESS_TOKEN_TTL%//g; s/%ACCESS_HEADER%//g; \
+        s/%NO_AUTH_HEADER%//g; s/%UI_RTL_SETTINGS%//g" "$DIST/cool.html"
+echo "  remaining %PLACEHOLDER%: $(grep -oE '%[A-Z_]+%' "$DIST/cool.html" | grep -v BRANDING_CSS | wc -l)  (BRANDING_CSS sits in an HTML comment)"
+
+echo "=== splash styling ==="
+"$LOWASM_ROOT/scripts/debrand.sh" "$DIST" || exit 1
+
+cp -f "$ONLINE_SRC/wasm/cool-payload-sw.js" "$DIST/"
+
+if [ "${READER:-}" = 1 ]; then
+  echo "=== font-subsetting soffice.data for a read-only viewer ==="
+  # Copy the pristine image first: the browser Makefile's copy is mtime-gated
+  # and will not restore a previously trimmed one.
+  cp -f "$CORE_BUILD/instdir/program/soffice.data" \
+        "$CORE_BUILD/instdir/program/soffice.data.js.metadata" "$DIST/"
+  "$NODE" "$LOWASM_ROOT/tools/reader-trim.mjs" "$DIST" || exit 1
+fi
+
+echo "=== stripping debug metadata ==="
+# The unstripped binary is kept: it is what makes an abort's stack trace
+# readable, by serving it in place of the stripped one.
+cp -f "$DIST/online.wasm" "$LOWASM_BUILD/online.wasm.unstripped"
+"$NODE" "$LOWASM_ROOT/tools/strip-wasm.mjs" \
+  "$LOWASM_BUILD/online.wasm.unstripped" "$DIST/online.wasm" | tail -3 || exit 1
+
+echo "=== result ==="
+for f in online.wasm soffice.data online.js; do
+  [ -f "$DIST/$f" ] && awk -v s="$(stat -c%s "$DIST/$f")" -v f="$f" \
+    'BEGIN { printf "  %8.1f MB  %s\n", s/1048576, f }'
+done
+echo "DONE $(date '+%F %T')  ->  $DIST"
