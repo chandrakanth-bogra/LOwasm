@@ -48,6 +48,7 @@ tools/      strip-wasm, reader-trim, split-ui (Node)
   | core | Re-enable Impress/Draw/Math for the Emscripten build |
   | core | Ship the simpress config files presentations need |
   | core | Keep Impress, Draw, Math and canvas at configure time |
+  | core | Add `sources.ver` so core builds from a non-git tree |
 
 Upstream history is not in this repository: `vendor` starts from a snapshot.
 
