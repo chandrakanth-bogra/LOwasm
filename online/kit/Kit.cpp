@@ -2530,7 +2530,20 @@ void Document::drainCallbacks()
 
 void Document::drainQueue()
 {
-    if (UnitKit::get().filterDrainQueue())
+    // The mobile-app guard is not optional here. UnitKit::get() dereferences
+    // GlobalArray[GlobalIndex], and those are only populated by
+    // UnitBase::init(), whose sole caller is ForKit.cpp -- which is not part of
+    // the Wasm build at all (see wasm/Makefile.am). So GlobalArray stays
+    // nullptr and GlobalIndex stays -1, and this reads nullptr[-1]: a memory
+    // access out of bounds that kills the kit as soon as it drains its first
+    // queue, which is to say immediately after a document is loaded. The
+    // assert() inside get() does not catch it because release builds define
+    // NDEBUG.
+    //
+    // Sibling call sites already do exactly this -- see
+    // ChildSession::filterLoKitCallback and KitWebSocket's filterKitMessage;
+    // drainQueue was simply missed.
+    if (!Util::isMobileApp() && UnitKit::get().filterDrainQueue())
     {
         LOG_TRC("Filter disabled drainQueue");
         return;

@@ -713,7 +713,13 @@ bool ChildSession::_handleInput(const char *buffer, int length)
             if (!saving)
             { // fallback to foreground save
 
-                UnitKit::get().preSaveHook();
+                // Guarded for the same reason as Document::drainQueue(): in a
+                // Wasm build UnitBase::init() never runs (its only caller,
+                // ForKit.cpp, is not compiled in), so UnitKit::get() reads
+                // nullptr[-1]. This one fires on the first save rather than the
+                // first queue drain.
+                if (!Util::isMobileApp())
+                    UnitKit::get().preSaveHook();
 
                 // Disable processing of other messages while saving document
                 InputProcessingManager processInput(getProtocol(), false);
