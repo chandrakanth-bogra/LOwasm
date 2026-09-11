@@ -221,7 +221,11 @@ int main(int argc, char* argv_main[])
 
             if (docKind == "server")
             {
-                remoteUrl = "/wasm/" + docDesc;
+                // LOWASM: served by our service worker, whose scope is
+                // /cowasm-wopi/ -- deliberately not the whole origin, so the
+                // worker cannot intercept the rest of the SPA. The same URL is
+                // reused by saveToServer() for the write-back POST.
+                remoteUrl = "/cowasm-wopi/wasm/" + docDesc;
 
                 printf("Fetching from url %s\n", remoteUrl.c_str());
 
