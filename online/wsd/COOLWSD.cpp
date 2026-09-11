@@ -3824,8 +3824,37 @@ void COOLWSD::innerMain()
 
 #elif defined __EMSCRIPTEN__
 
-    // Hard-code a somewhat random log level:
-    Log::setLevel("information");
+    // LOWASM: the WASM viewer ships quiet -- warnings and errors only, no INF
+    // flood. Overridable per page load with ?loglevel=information|debug|trace,
+    // because the alternative when something hangs in here is a ~6 minute
+    // rebuild to see upstream's own log lines. Default is unchanged.
+    //
+    // Read once, not per run: MAIN_THREAD_EM_ASM_INT blocks this thread until
+    // the browser's main thread services the proxy queue, and under warm engine
+    // reuse innerMain() runs once per document rather than once per process --
+    // at exactly the moment the main thread is busiest rebuilding the doc layer.
+    // location.search cannot change without a reload that rebuilds the module.
+    //
+    // Parsed the way browser/js/global.js's coolParams does -- URLSearchParams
+    // over the slice after the *last* '?' -- because these URLs carry a nested,
+    // encoded WOPISrc with a query string of its own, and a naive scan would let
+    // a loglevel= inside that sub-parameter win.
+    //
+    // Inlined rather than calling coolParams: this static is initialised on the
+    // first innerMain(), which runs before global.js constructs coolParams, so
+    // going through it silently cached "warning" forever (measured).
+    static const std::string wasmLogLevel = []
+    {
+        char* const level = reinterpret_cast<char*>(MAIN_THREAD_EM_ASM_INT({
+            const s = location.search;
+            const v = new URLSearchParams(s.slice(s.lastIndexOf('?') + 1)).get('loglevel');
+            return v ? stringToNewUTF8(v) : 0;
+        }));
+        const std::string parsed = level ? level : "warning";
+        std::free(level);
+        return parsed;
+    }();
+    Log::setLevel(wasmLogLevel);
 
 #endif
 

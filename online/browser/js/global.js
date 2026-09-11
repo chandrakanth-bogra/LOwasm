@@ -513,8 +513,8 @@ class EMSCRIPTENAppInitializer extends MobileAppInitializer {
 
 		window.ThisIsTheEmscriptenApp = true;
 		window.postMobileMessage = function(msg) { Module._handle_cool_message(Module.stringToNewUTF8(msg)); };
-		window.postMobileError   = function(msg) { console.log('COOL Error: ' + msg); };
-		window.postMobileDebug   = function(msg) { console.log('COOL Debug: ' + msg); };
+		window.postMobileError   = function(msg) { window.app.console.error('COOL Error: ' + msg); };
+		window.postMobileDebug   = function(msg) { window.app.console.log('COOL Debug: ' + msg); };
 
 		window.userInterfaceMode = 'notebookbar';
 	}
@@ -547,6 +547,11 @@ function getInitializerClass() {
 (function (global) {
 	const initializer = getInitializerClass();
 	initializer.afterInitialization();
+
+	// LOWASM: the WASM viewer has no browser-logging endpoint and ships quiet;
+	// MobileAppInitializer forces coolLogging on, so undo that here.
+	if (global.ThisIsTheEmscriptenApp)
+		global.coolLogging = '';
 
 	global.logServer = function (log) {
 		if (global.ThisIsAMobileApp) {

@@ -61,7 +61,7 @@ static void send2JS(const std::vector<char>& buffer)
 extern "C"
 void handle_cool_message(const char *string_value)
 {
-    std::cout << "================ handle_cool_message(): '" << string_value << "'" << std::endl;
+    LOG_DBG("handle_cool_message(): '" << string_value << '\'');
 
     if (strcmp(string_value, "HULLO") == 0)
     {
@@ -124,7 +124,7 @@ void handle_cool_message(const char *string_value)
         // First we simply send it the URL. This corresponds to the GET request with Upgrade to
         // WebSocket.
         LOG_TRC_NOFILE("Actually sending to Online:" << fileURL);
-        std::cout << "Loading file [" << fileURL << "]" << std::endl;
+        LOG_DBG("Loading file [" << fileURL << ']');
 
         fakeSocketWriteQueue(fakeClientFd, fileURL.c_str(), fileURL.size());
     }
@@ -192,8 +192,6 @@ void saveToServer() {
 
 int main(int argc, char* argv_main[])
 {
-    std::cout << "================ Here is main()" << std::endl;
-
     assert(argc == 3);
 
     Log::initialize("WASM", "error", false, false, {}, false, {});
@@ -227,7 +225,7 @@ int main(int argc, char* argv_main[])
                 // reused by saveToServer() for the write-back POST.
                 remoteUrl = "/cowasm-wopi/wasm/" + docDesc;
 
-                printf("Fetching from url %s\n", remoteUrl.c_str());
+                LOG_DBG("Fetching from url " << remoteUrl);
 
                 emscripten_fetch_attr_t attr;
                 emscripten_fetch_attr_init(&attr);
@@ -237,19 +235,19 @@ int main(int argc, char* argv_main[])
                     &attr, remoteUrl.data()); // Blocks here until the operation is complete.
                 if (fetch->status == 200)
                 {
-                    printf("Finished downloading %llu bytes from URL %s.\n", fetch->numBytes,
-                           fetch->url);
+                    LOG_DBG("Finished downloading " << fetch->numBytes << " bytes from URL "
+                            << fetch->url);
                     tempFile = "/tempdoc";
                     FILE* f = fopen(tempFile, "w");
                     const int wrote = fwrite(fetch->data, 1, fetch->numBytes, f);
                     fclose(f);
-                    printf("Wrote %d bytes into %s\n", wrote, tempFile);
+                    LOG_DBG("Wrote " << wrote << " bytes into " << tempFile);
                     fileURL = std::string("file://") + tempFile;
                 }
                 else
                 {
-                    printf("Downloading %s failed, HTTP failure status code: %d.\n", fetch->url,
-                           fetch->status);
+                    LOG_ERR("Downloading " << fetch->url << " failed, HTTP failure status code: "
+                            << fetch->status);
                     std::exit(EXIT_FAILURE); //TODO: error handling
                 }
                 emscripten_fetch_close(fetch);
@@ -269,7 +267,6 @@ int main(int argc, char* argv_main[])
         })
         .detach();
 
-    std::cout << "================ main() is returning" << std::endl;
     return 0;
 }
 
