@@ -42,5 +42,8 @@ fi
 [ "$mode" = --configure-only ] && { echo "=== configured ==="; exit 0; }
 
 echo "=== building core (parallelism $LOWASM_JOBS) ==="
-make -r
+# PARALLELISM is baked into config_host.mk at configure time, so passing it here
+# too is what lets LOWASM_JOBS take effect on an already-configured tree --
+# otherwise a 64-core box silently keeps whatever the first configure recorded.
+make -r PARALLELISM="$LOWASM_JOBS"
 echo "=== core done ==="
