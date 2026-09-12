@@ -49,6 +49,20 @@ if [ "${READER:-}" = 1 ]; then
   "$NODE" "$LOWASM_ROOT/tools/reader-trim.mjs" "$DIST" || exit 1
 fi
 
+echo "=== checking the filesystem image against its loader ==="
+# A stale loader (online.js creating fewer directories than soffice.data needs)
+# fails every document at startup with a pathless ErrnoError (ENOENT). Checking
+# that the files exist does not catch it; this does, and names the directories.
+META=$DIST/soffice.data.js.metadata
+[ -f "$META" ] || META=$CORE_BUILD/instdir/program/soffice.data.js.metadata
+"$NODE" "$LOWASM_ROOT/tools/check-fs-image.mjs" "$META" "$DIST/online.js" || {
+  echo "FAILED: online.js does not create every directory soffice.data needs."
+  echo "  Regenerate core's filesystem image, then rebuild Online:"
+  echo "    rm -rf $CORE_BUILD/workdir/CustomTarget/static/emscripten_fs_image"
+  echo "    scripts/build-core.sh && scripts/finish.sh"
+  exit 1
+}
+
 echo "=== stripping debug metadata ==="
 # The unstripped binary is kept: it is what makes an abort's stack trace
 # readable, by serving it in place of the stripped one.

@@ -88,7 +88,7 @@ Or step by step:
 | `scripts/setup.sh` | fetches Node 20 and the zstd + POCO sources (SHA-256 pinned), pulls the builder image | seconds |
 | `scripts/build-deps.sh` | builds zstd and POCO with `-fwasm-exceptions` | minutes |
 | `scripts/build-core.sh` | configures (`CPWASM-LOKit`) and builds core; downloads ~90 external tarballs | **hours** |
-| `scripts/finish.sh` | builds Online, then blanks placeholders, styles the splash, adds the service worker, strips debug metadata | minutes |
+| `scripts/finish.sh` | builds Online, then blanks placeholders, styles the splash, adds the service worker, checks the filesystem image against its loader, strips debug metadata | minutes |
 
 The payload lands in `build/online/browser/dist/`.
 
@@ -199,8 +199,23 @@ Expect rebase conflicts in the files our commits touch and Collabora changes oft
   module-scoped one.
 - **`lokit_main_mutex` is not a barrier on WASM.** It is acquired the instant it is
   requested while kit threads keep running.
+- **A stale loader directory table.** `online.js` bakes in core's `soffice.data.js.link`,
+  which creates every MEMFS directory before any file is written. Change core's file list
+  (enabling Impress adds the simpress/sdraw/smath config) without regenerating the loader
+  and *every* document dies during startup with a pathless `ErrnoError` (ENOENT) — before
+  loading begins. Checking that the files exist does not catch it; only the directory table
+  is stale. `finish.sh` now fails the build on this, and `tools/check-fs-image.mjs` names
+  the missing directories.
+- **Mixing build trees.** Online links against whatever `--with-lo-path` pointed at when it
+  was last configured, which is not necessarily the core you just built. This is what the
+  stale-loader failure above usually turns out to be. Check
+  `grep with-lo-path build/online/config.log`, and confirm the served `soffice.data` is
+  byte-identical to `build/core/instdir/program/soffice.data`.
 - **A wedged page makes Playwright hang rather than fail.** Race `page.evaluate`
   against a timer.
+- **`_docLoaded` flips before a single tile has painted.** Screenshot on that edge and you
+  get the UI shell over an empty canvas, which looks like a broken build but is not. Let it
+  settle, then measure non-background pixels on the largest canvas.
 - **Stack traces:** `finish.sh` keeps `build/online.wasm.unstripped`; serve it in place
   of the stripped `online.wasm` to get a readable trace.
 
