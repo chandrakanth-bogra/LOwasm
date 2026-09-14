@@ -3,11 +3,46 @@
  * window.L.CanvasTileLayer is a layer with canvas based rendering.
  */
 
-/* global app JSDialog CanvasSectionContainer GraphicSelection CanvasOverlay CursorHeaderSection $ _ CPolyUtil CPolygon Cursor UNOKey cool OtherViewCellCursorSection TileManager SplitSection TextSelections CellSelectionMarkers URLPopUpSection CalcValidityDropDown DocumentBase CellCursorSection FormFieldButton TextCursorSection CStyleData CSelections CReferences OtherViewGraphicSelectionSection CompareChangesLabelSection */
+/* global app JSDialog CanvasSectionContainer GraphicSelection CanvasOverlay CursorHeaderSection $ _ CPolyUtil CPolygon Cursor UNOKey cool OtherViewCellCursorSection TileManager SplitSection TextSelections CellSelectionMarkers URLPopUpSection CalcValidityDropDown DocumentBase CellCursorSection FormFieldButton TextCursorSection CStyleData CSelections CReferences OtherViewGraphicSelectionSection CompareChangesLabelSection Module */
 
 function clamp(num, min, max)
 {
 	return Math.min(Math.max(num, min), max);
+}
+
+// LOWASM: there is no server to serve a downloadas/export result from, so
+// _onDownloadAsMsg reads the file the kit wrote into the Emscripten
+// filesystem directly and builds a blob: URL from it -- this table only
+// needs to cover the extensions this build's own menus actually offer
+// (Control.Menubar.ts), not every format LibreOffice can produce.
+var LOWASM_DOWNLOAD_MIME_TYPES = {
+	odt: 'application/vnd.oasis.opendocument.text',
+	doc: 'application/msword',
+	docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+	rtf: 'application/rtf',
+	pdf: 'application/pdf',
+	epub: 'application/epub+zip',
+	html: 'text/html',
+	odp: 'application/vnd.oasis.opendocument.presentation',
+	ppt: 'application/vnd.ms-powerpoint',
+	pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+	odg: 'application/vnd.oasis.opendocument.graphics',
+	ods: 'application/vnd.oasis.opendocument.spreadsheet',
+	xls: 'application/vnd.ms-excel',
+	xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+	csv: 'text/csv',
+	svg: 'image/svg+xml',
+	swf: 'application/x-shockwave-flash',
+	bmp: 'image/bmp',
+	gif: 'image/gif',
+	png: 'image/png',
+	tiff: 'image/tiff',
+};
+
+function getDownloadMimeType(filename)
+{
+	var ext = filename.split('.').pop().toLowerCase();
+	return LOWASM_DOWNLOAD_MIME_TYPES[ext] || 'application/octet-stream';
 }
 
 window.L.TileSectionManager = window.L.Class.extend({
@@ -1541,34 +1576,40 @@ window.L.CanvasTileLayer = window.L.Layer.extend({
 
 	_onDownloadAsMsg: function (textMsg) {
 		var command = app.socket.parseServerCmd(textMsg);
-		var parser = document.createElement('a');
-		parser.href = window.host;
 
-		var url = window.makeHttpUrlWopiSrc('/' + this._map.options.urlPrefix + '/',
-			this._map.options.doc, '/download/' + command.downloadid);
+		// LOWASM: there is no server to GET the result from -- ChildSession::downloadAs
+		// (online/kit/ChildSession.cpp) already wrote it into the Emscripten filesystem.
+		// This build resolves getJailDocRoot() to the literal /tmp/user/docs/ (the
+		// NoCapsForKit branch, since host_os=emscripten sets MOBILEAPP=1), so the file
+		// is at exactly this path. Read it and hand the browser a blob: URL instead.
+		var path = '/tmp/user/docs/' + command.downloadid + '/' + command.filename;
+		var bytes = Module.FS.readFile(path);
+		var url = URL.createObjectURL(new Blob([bytes], { type: getDownloadMimeType(command.filename) }));
+		try {
+			// The real HTTP /download/ handler is what deletes this on the non-WASM
+			// path; that handler never runs here, so this file would otherwise leak
+			// for the tab's life. Safe immediately: the Blob above already owns a
+			// copy of the bytes.
+			Module.FS.unlink(path);
+			Module.FS.rmdir('/tmp/user/docs/' + command.downloadid);
+		} catch (e) {
+			// already gone, or the dir wasn't empty for some other reason -- not fatal
+		}
 
 		this._map.hideBusy();
 		if (this._map['wopi'].DownloadAsPostMessage) {
 			this._map.fire('postMessage', {msgId: 'Download_As', args: {Type: command.id, URL: url, filename: command.filename}});
 		}
 		else if (command.id === 'print') {
+			if ('processCoolUrl' in window) {
+				url = window.processCoolUrl({ url: url, type: 'print' });
+			}
+
 			if (this._map.options.print === false || window.L.Browser.cypressTest) {
 				// open the pdf in a new tab, it can be printed directly in the browser's pdf viewer
-				url = window.makeHttpUrlWopiSrc('/' + this._map.options.urlPrefix + '/',
-					this._map.options.doc, '/download/' + command.downloadid,
-					'attachment=0');
-
-				if ('processCoolUrl' in window) {
-					url = window.processCoolUrl({ url: url, type: 'print' });
-				}
-
 				window.open(url, '_blank');
 			}
 			else {
-				if ('processCoolUrl' in window) {
-					url = window.processCoolUrl({ url: url, type: 'print' });
-				}
-
 				this._map.fire('filedownloadready', {url: url});
 			}
 		}
@@ -1581,10 +1622,22 @@ window.L.CanvasTileLayer = window.L.Layer.extend({
 			}
 
 			// Don't do a real download during testing
-			if (!window.L.Browser.cypressTest)
-				this._map._fileDownloader.src = url;
-			else
+			if (!window.L.Browser.cypressTest) {
+				// A blob: URL carries no Content-Disposition header, so simply
+				// navigating to it would let the browser render a displayable
+				// type (pdf/svg/html/image) instead of downloading it. Force a
+				// real save via a synthetic <a download>, instead of the hidden
+				// download-iframe technique the real HTTP path used.
+				var a = document.createElement('a');
+				a.href = url;
+				a.download = command.filename;
+				document.body.appendChild(a);
+				a.click();
+				a.remove();
+			}
+			else {
 				this._map._fileDownloader.setAttribute('data-src', url);
+			}
 		}
 	},
 

@@ -39,7 +39,12 @@ namespace FileUtil
     std::string createRandomDir(const std::string& path)
     {
         std::string name = Util::rng::getFilename(64);
-        createDirectory(path + '/' + name);
+        // createDirectory (singular) requires `path` to already exist, which a
+        // real deployment's jail/chroot setup guarantees. The WASM build has no
+        // jail (NoCapsForKit), so nothing ever creates e.g. JAILED_DOCUMENT_ROOT
+        // itself -- use the recursive variant so it's created on demand there
+        // too. A no-op elsewhere: creating an already-existing parent is safe.
+        createDirectories(path + '/' + name);
         return name;
     }
 
