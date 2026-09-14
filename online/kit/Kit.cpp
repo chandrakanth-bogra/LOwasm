@@ -58,6 +58,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <cxxabi.h>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -2469,6 +2470,23 @@ bool Document::processInputEnabled() const
     return enabled;
 }
 
+namespace
+{
+/// Name the exception currently being handled, for catch (...) blocks: UNO
+/// exceptions do not derive from std::exception, so they arrive there unnamed.
+std::string currentExceptionTypeName()
+{
+    const std::type_info* type = abi::__cxa_current_exception_type();
+    if (!type)
+        return "<no exception>";
+
+    int status = 0;
+    const std::unique_ptr<char, void (*)(void*)> demangled(
+        abi::__cxa_demangle(type->name(), nullptr, nullptr, &status), std::free);
+    return status == 0 && demangled ? demangled.get() : type->name();
+}
+} // namespace
+
 void Document::drainCallbacks()
 {
     KitQueue::Callback cb;
@@ -2621,7 +2639,7 @@ void Document::drainQueue()
     }
     catch (...)
     {
-        LOG_FTL("drainQueue: Unknown exception");
+        LOG_FTL("drainQueue: Unknown exception: " << currentExceptionTypeName());
         if constexpr (!Util::isMobileApp())
             flushAndExit(EX_SOFTWARE);
     }
