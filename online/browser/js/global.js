@@ -552,6 +552,16 @@ class EMSCRIPTENAppInitializer extends MobileAppInitializer {
 			};
 		}
 
+		// Overridable by the host page; there is no server to save back to, so
+		// saveToServer() (wasm/wasmapp.cpp) hands the saved document's bytes
+		// here instead of POSTing them anywhere. `url` is the document's
+		// original fetch path, useful only as an identifier.
+		if (typeof window.coolDocumentSaved !== 'function') {
+			window.coolDocumentSaved = function(url, bytes) {
+				window.app.console.log('COOL: saved ' + bytes.length + ' bytes for ' + url);
+			};
+		}
+
 		window.userInterfaceMode = 'notebookbar';
 	}
 }

@@ -230,16 +230,18 @@ void saveToServer() {
             return;
         }
     }
-    emscripten_fetch_attr_t attr;
-    emscripten_fetch_attr_init(&attr);
-    strcpy(attr.requestMethod, "POST");
-    attr.attributes = EMSCRIPTEN_FETCH_SYNCHRONOUS; //TODO: make this asynchronous
-    attr.requestData = buf.get();
-    attr.requestDataSize = n;
-    emscripten_fetch_t * fetch = emscripten_fetch(&attr, remoteUrl.c_str());
-    emscripten_fetch_close(fetch);
-    LOG_TRC("Saved " << tempFile << " back to <" << remoteUrl << ">: " << fetch->status);
-    //TODO: handle fetch->status != 200
+    // LOWASM: there is no server to POST back to -- this is a static host.
+    // Hand the bytes to the embedding page instead, mirroring reportLoadFailure's
+    // "call the global hook if it exists" idiom and send2JS's HEAPU8.slice byte-
+    // passing idiom. `remoteUrl` is passed through only as an identifier, the
+    // same string the document was originally fetched from.
+    MAIN_THREAD_EM_ASM({
+        if (typeof globalThis.coolDocumentSaved === 'function') {
+            const bytes = HEAPU8.slice($0, $0 + $1);
+            globalThis.coolDocumentSaved(UTF8ToString($2), bytes);
+        }
+    }, buf.get(), n, remoteUrl.c_str());
+    LOG_TRC("Saved " << tempFile << " (" << n << " bytes), handed to coolDocumentSaved for <" << remoteUrl << '>');
 }
 
 // LOWASM: tell JS a document could not be fetched. Before warm reuse this path
