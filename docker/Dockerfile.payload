@@ -1,0 +1,29 @@
+# A built LOwasm payload, served by nginx.
+#
+# Built by scripts/publish-ghcr.sh, which passes the payload directory as the
+# build context. Two ways to use the image:
+#
+#   docker run -p 8080:80 ghcr.io/<owner>/lowasm:<sha>
+#       serve it directly -- standalone viewer, or a CDN origin.
+#
+#   init container: copy /usr/share/nginx/html into a shared volume and let the
+#       application's own web server serve it at /lowasm/<sha>/. Recommended:
+#       same-origin with the application means no CORS, no CORP, and no
+#       cross-origin Worker problem (the engine spawns pthread Workers from
+#       online.js, which must be same-origin with the page that creates them).
+FROM nginx:alpine
+
+COPY nginx-payload.conf /etc/nginx/conf.d/default.conf
+COPY dist/ /usr/share/nginx/html/
+
+# Fail the build rather than ship a payload that cannot start: online.js creates
+# the MEMFS directory tree, soffice.data fills it, and the metadata file is
+# fetched by relative name at startup.
+RUN set -e; \
+    for f in cool.html online.js online.wasm soffice.data soffice.data.js.metadata lowasm.js; do \
+        [ -s "/usr/share/nginx/html/$f" ] || { echo "missing or empty: $f" >&2; exit 1; }; \
+    done
+
+LABEL org.opencontainers.image.title="LOwasm payload" \
+      org.opencontainers.image.description="Collabora Online + LibreOffice compiled to WebAssembly, served by nginx" \
+      org.opencontainers.image.licenses="MPL-2.0"
