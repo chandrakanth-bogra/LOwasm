@@ -315,6 +315,26 @@ void importSheetFragments( WorkbookFragment& rWorkbookHandler, SheetFragmentVect
 {
     rWorkbookHandler.getDocImport().initForSheets();
 
+    // LOWASM: running on the browser's event loop makes Application::Yield()
+    // abort outright (vcl/source/app/svapp.cxx), so the threaded import below --
+    // which spins on Yield() until the workers signal EndYield() -- takes the
+    // whole process down on every .xlsx. Import the sheets sequentially on this
+    // thread instead: no yield, no handing the SolarMutex to workers, and
+    // nothing blocks the main thread. Gate on the same condition that makes
+    // Yield() fatal rather than on a platform macro, so this stays in step with
+    // vcl (Application::Reschedule() degrades on exactly this condition too).
+    // The progress-bar wrapping is skipped deliberately: its timer only fires
+    // from inside a yield, so it could never report anything here.
+    if( Application::IsOnSystemEventLoop() )
+    {
+        for( auto& [rxSheetGlob, rxFragment] : rSheets )
+        {
+            (void)rxSheetGlob;
+            rWorkbookHandler.importOoxFragment( rxFragment );
+        }
+        return;
+    }
+
     // test sequential read in this mode
     comphelper::ThreadPool &rSharedPool = comphelper::ThreadPool::getSharedOptimalPool();
     std::shared_ptr<comphelper::ThreadTaskTag> pTag = comphelper::ThreadPool::createThreadTaskTag();
