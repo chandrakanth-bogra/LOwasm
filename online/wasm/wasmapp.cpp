@@ -19,10 +19,10 @@
 #include <Util.hpp>
 #include <common/SigUtil.hpp>
 
-#include <emscripten/fetch.h>
 #include <unistd.h>
 
 #include <cassert>
+#include <cerrno>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -30,12 +30,17 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 
 int coolwsd_server_socket_fd = -1;
 
-static char const * tempFile; // null when operating on a local file in the Emscripten file system
-static std::string remoteUrl;
+// The document currently open, as written into the Emscripten filesystem by the
+// host (see lowasm.js). documentPath is the filesystem path, documentName the
+// bare file name handed back to the host with the saved bytes, and fileURL the
+// file:// form COOLWSD is given. All three are empty until the first load.
+static std::string documentPath;
+static std::string documentName;
 static std::string fileURL;
 static int fakeClientFd;
 static int closeNotificationPipeForForwardingThread[2] = {-1, -1};
@@ -56,27 +61,14 @@ static int closeNotificationPipeForForwardingThread[2] = {-1, -1};
 // to wait for that run to finish.
 static std::mutex coolwsdRunningMutex;
 
-/// Where a document's bytes come from. Parsed once at the JS boundary so the
-/// engine thread never has to re-test a string.
-enum class DocKind
-{
-    Server, ///< fetched through the /cowasm-wopi/ service worker
-    Local ///< already present in the Emscripten filesystem
-};
-
-struct PendingDocument
-{
-    DocKind kind;
-    std::string desc;
-};
-
-// The next document to open. Written from the JS thread by cool_load_document,
-// read by the engine thread, so it needs the mutex -- the Android equivalent
-// assigns its fileURL unsynchronised and gets away with it. The optional is the
-// "is one waiting" flag; there is nothing else to keep in sync with it.
+// The next document to open, as a file:// URL. Written from the JS thread by
+// cool_load_document, read by the engine thread, so it needs the mutex -- the
+// Android equivalent assigns its fileURL unsynchronised and gets away with it.
+// The optional is the "is one waiting" flag; there is nothing else to keep in
+// sync with it.
 static std::mutex pendingMutex;
 static std::condition_variable pendingCv;
-static std::optional<PendingDocument> pendingDocument;
+static std::optional<std::string> pendingDocument;
 
 static void send2JS(const std::vector<char>& buffer)
 {
@@ -200,25 +192,26 @@ struct FileClose {
 }
 
 void saveToServer() {
-    if (tempFile == nullptr) {
+    if (documentPath.empty()) {
         return;
     }
+    const char* const path = documentPath.c_str();
     long n;
     std::unique_ptr<char[]> buf;
     {
-        auto const f = std::unique_ptr<FILE, FileClose>(std::fopen(tempFile, "r"));
+        auto const f = std::unique_ptr<FILE, FileClose>(std::fopen(path, "r"));
         if (f.get() == nullptr) {
-            LOG_WRN("Failed to open " << tempFile << " for reading"); //TODO
+            LOG_WRN("Failed to open " << path << " for reading"); //TODO
             return;
         }
         int e = std::fseek(f.get(), 0, SEEK_END);
         if (e != 0) {
-            LOG_WRN("Failed to seek in " << tempFile); //TODO
+            LOG_WRN("Failed to seek in " << path); //TODO
             return;
         }
         n = std::ftell(f.get());
         if (n == -1) {
-            LOG_WRN("Failed to get size of " << tempFile); //TODO
+            LOG_WRN("Failed to get size of " << path); //TODO
             return;
         }
         buf = std::make_unique<char[]>(n);
@@ -226,88 +219,76 @@ void saveToServer() {
         std::size_t n2 = std::fread(buf.get(), 1, n, f.get());
         assert(n >= 0);
         if (n2 != static_cast<unsigned long>(n)) {
-            LOG_WRN("Failed to get read " << tempFile); //TODO
+            LOG_WRN("Failed to get read " << path); //TODO
             return;
         }
     }
-    // LOWASM: there is no server to POST back to -- this is a static host.
-    // Hand the bytes to the embedding page instead, mirroring reportLoadFailure's
-    // "call the global hook if it exists" idiom and send2JS's HEAPU8.slice byte-
-    // passing idiom. `remoteUrl` is passed through only as an identifier, the
-    // same string the document was originally fetched from.
+    // LOWASM: there is no server to POST back to -- the host handed us the bytes
+    // and the host takes them back. Mirrors reportLoadFailure's "call the global
+    // hook if it exists" idiom and send2JS's HEAPU8.slice byte-passing idiom.
+    // `documentName` identifies which document these bytes are, and is the same
+    // name the host passed to lowasm.load().
     MAIN_THREAD_EM_ASM({
         if (typeof globalThis.coolDocumentSaved === 'function') {
             const bytes = HEAPU8.slice($0, $0 + $1);
             globalThis.coolDocumentSaved(UTF8ToString($2), bytes);
         }
-    }, buf.get(), n, remoteUrl.c_str());
-    LOG_TRC("Saved " << tempFile << " (" << n << " bytes), handed to coolDocumentSaved for <" << remoteUrl << '>');
+    }, buf.get(), n, documentName.c_str());
+    LOG_TRC("Saved " << path << " (" << n << " bytes), handed to coolDocumentSaved for <" << documentName << '>');
 }
 
-// LOWASM: tell JS a document could not be fetched. Before warm reuse this path
+// LOWASM: tell JS a document could not be opened. Before warm reuse this path
 // was std::exit(EXIT_FAILURE), which was survivable only because the instance
 // was being thrown away with the document. Now the instance is shared, so one
-// bad URL must not take the engine and every later document down with it.
+// bad document must not take the engine and every later document down with it.
 static void reportLoadFailure(const std::string& url, int status)
 {
     // The message itself is LOG_ERR'd above, and global.js always installs a
     // coolDocumentLoadFailed default, so there is deliberately no fallback
     // message here -- a second copy would only drift from the JS one.
-    LOG_ERR("Downloading " << url << " failed, HTTP failure status code: " << status);
+    LOG_ERR("Opening " << url << " failed, status: " << status);
     MAIN_THREAD_EM_ASM({
         if (typeof globalThis.coolDocumentLoadFailed === 'function')
             globalThis.coolDocumentLoadFailed(UTF8ToString($0), $1);
     }, url.c_str(), status);
 }
 
-/// Fetch the requested document into the Emscripten filesystem and point
-/// fileURL at it. Returns false if the document could not be obtained, in which
-/// case the engine stays up and simply waits for the next request.
-static bool prepareDocument(const PendingDocument& doc)
+/// "file:///docs/a.odt" -> "/docs/a.odt". Anything without the scheme is already
+/// a filesystem path and is returned unchanged, so the host may pass either.
+static std::string stripFileScheme(const std::string& url)
 {
-    // The module now outlives the document, so the previous one's bytes would
-    // otherwise sit in MEMFS for the life of the tab. (A server->server swap
-    // truncates via fopen "w"; a swap to a local document would not.)
-    unlink("/tempdoc");
-    tempFile = nullptr;
+    constexpr std::string_view scheme = "file://";
+    return url.starts_with(scheme) ? url.substr(scheme.size()) : url;
+}
 
-    if (doc.kind == DocKind::Local)
+/// Point fileURL at the requested document, which the host has already written
+/// into the Emscripten filesystem. Returns false if it is not there, in which
+/// case the engine stays up and simply waits for the next request.
+///
+/// LOWASM: this used to GET /cowasm-wopi/wasm/<name> with emscripten_fetch. The
+/// engine no longer does HTTP at all -- fetching is the host's business, which
+/// is what lets the payload be served from anywhere (a CDN, a versioned path)
+/// while documents come from somewhere else entirely, with their own auth.
+static bool prepareDocument(const std::string& desc)
+{
+    // The module outlives the document, so without this the previous one's bytes
+    // would sit in MEMFS for the life of the tab.
+    if (!documentPath.empty() && documentPath != stripFileScheme(desc))
+        unlink(documentPath.c_str());
+
+    documentPath = stripFileScheme(desc);
+    documentName = documentPath.substr(documentPath.find_last_of('/') + 1);
+
+    if (::access(documentPath.c_str(), R_OK) != 0)
     {
-        fileURL = doc.desc;
-        return true;
-    }
-
-    // LOWASM: served by our service worker, whose scope is /cowasm-wopi/ --
-    // deliberately not the whole origin, so the worker cannot intercept the rest
-    // of the SPA. The same URL is reused by saveToServer() for the write-back POST.
-    remoteUrl = "/cowasm-wopi/wasm/" + doc.desc;
-
-    LOG_DBG("Fetching from url " << remoteUrl);
-
-    emscripten_fetch_attr_t attr;
-    emscripten_fetch_attr_init(&attr);
-    strcpy(attr.requestMethod, "GET");
-    attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_SYNCHRONOUS;
-    emscripten_fetch_t* fetch =
-        emscripten_fetch(&attr, remoteUrl.data()); // Blocks here until the operation is complete.
-
-    if (fetch->status != 200)
-    {
-        const int status = fetch->status;
-        emscripten_fetch_close(fetch);
-        reportLoadFailure(remoteUrl, status);
+        documentPath.clear();
+        documentName.clear();
+        reportLoadFailure(desc, ENOENT);
         return false;
     }
 
-    LOG_DBG("Finished downloading " << fetch->numBytes << " bytes from URL " << fetch->url);
-    tempFile = "/tempdoc";
-    FILE* f = fopen(tempFile, "w");
-    const int wrote = fwrite(fetch->data, 1, fetch->numBytes, f);
-    fclose(f);
-    LOG_DBG("Wrote " << wrote << " bytes into " << tempFile);
-    fileURL = std::string("file://") + tempFile;
-
-    emscripten_fetch_close(fetch);
+    fileURL = desc;
+    LOG_DBG("Opening " << fileURL);
     return true;
 }
 
@@ -365,15 +346,15 @@ static void engineLoop()
 
     while (true)
     {
-        PendingDocument doc;
+        std::string desc;
         {
             std::unique_lock<std::mutex> lock(pendingMutex);
             pendingCv.wait(lock, [] { return pendingDocument.has_value(); });
-            doc = std::move(*pendingDocument);
+            desc = std::move(*pendingDocument);
             pendingDocument.reset();
         }
 
-        if (!prepareDocument(doc))
+        if (!prepareDocument(desc))
             continue; // engine stays warm; wait for the next request
 
         {
@@ -402,23 +383,21 @@ static void engineLoop()
 
 /// Open a document on the warm engine, starting the engine on first use.
 /// Safe to call from JS at any time; returns without blocking.
-extern "C" void cool_load_document(const char* kind, const char* desc)
+extern "C" void cool_load_document(const char* desc)
 {
-    LOG_DBG("cool_load_document(" << kind << ", " << desc << ')');
+    LOG_DBG("cool_load_document(" << desc << ')');
 
-    // Rejected here rather than queued: a bad kind from the host page should not
-    // cost a teardown of the document currently on screen.
-    if (strcmp(kind, "server") != 0 && strcmp(kind, "local") != 0)
+    // Rejected here rather than queued: a bad descriptor from the host page
+    // should not cost a teardown of the document currently on screen.
+    if (desc == nullptr || *desc == '\0')
     {
-        LOG_ERR("Unknown document kind [" << kind << ']');
+        LOG_ERR("cool_load_document called with no document");
         return;
     }
 
     {
         std::lock_guard<std::mutex> lock(pendingMutex);
-        pendingDocument = PendingDocument{
-            strcmp(kind, "local") == 0 ? DocKind::Local : DocKind::Server, desc
-        };
+        pendingDocument = desc;
     }
     pendingCv.notify_one();
 
@@ -440,8 +419,6 @@ extern "C" void cool_load_document(const char* kind, const char* desc)
 
 int main(int argc, char* argv_main[])
 {
-    assert(argc == 3);
-
     Log::initialize("WASM", "error", false, false, {}, false, {});
     Util::setThreadName("main");
 
@@ -450,7 +427,13 @@ int main(int argc, char* argv_main[])
                                      LOG_TRC_NOFILE(line);
                                  });
 
-    cool_load_document(argv_main[1], argv_main[2]);
+    // LOWASM: the module boots with no document and waits. Upstream asserted
+    // argc == 3 and opened argv[1]/argv[2] here, which forced every embedder to
+    // know its first document before the engine existed. The host now calls
+    // lowasm.load() -> cool_load_document() whenever it has bytes, so a
+    // descriptor on argv is optional and only kept for a standalone page.
+    if (argc > 1 && argv_main[1] != nullptr && *argv_main[1] != '\0')
+        cool_load_document(argv_main[1]);
 
     return 0;
 }

@@ -22,8 +22,10 @@ extern "C" void handle_cool_message(const char *string_value);
 
 /// LOWASM: open a document on the warm engine (see wasmapp.cpp). Starts the
 /// engine on first call; afterwards closes the current document and opens the
-/// requested one on the same module instance. `kind` is "server" or "local".
-extern "C" void cool_load_document(const char *kind, const char *desc);
+/// requested one on the same module instance. `desc` is a file:// URL naming a
+/// document the host has already written into the Emscripten filesystem --
+/// the engine never fetches anything itself.
+extern "C" void cool_load_document(const char *desc);
 
 void saveToServer();
 
