@@ -6,11 +6,11 @@
 #     port      host port                       (default: 18081)
 #     docs-dir  documents to open               (optional)
 #
-# Open http://127.0.0.1:<port>/cool.html?WOPISrc=<file in docs-dir>
+# Open http://127.0.0.1:<port>/lowasm-test.html?doc=<file in docs-dir>
 #
-# The engine currently fetches documents from /cowasm-wopi/wasm/<name>, so
-# docs-dir is served at that path. (That prefix is due to become
-# host-configurable.)
+# The engine does not fetch documents -- a host hands it bytes via
+# window.lowasm.load(). docs-dir is served at /docs/ for lowasm-test.html, which
+# plays the part of that host. cool.html on its own opens no document.
 #
 # Cross-origin isolation is mandatory: the module is threaded WASM and needs
 # SharedArrayBuffer, so COOP/COEP go on every response. .wasm must be
@@ -48,16 +48,21 @@ server {
         add_header Cross-Origin-Resource-Policy "same-origin" always;
         add_header Cache-Control "no-store" always;
     }
-    # The ~260 MB of wasm + filesystem image dominate load; immutable lets a
-    # plain reload come from disk cache and V8 reuse its compiled-wasm cache.
-    # Not content-hashed here, so hard-reload once after each rebuild.
+    # The ~280 MB of wasm + filesystem image dominate load, so caching them is
+    # tempting -- but these paths are not content-hashed, and `immutable` made a
+    # rebuilt engine unreachable even through a hard reload: the browser kept the
+    # previous online.wasm while loading the new JS, which fails as an assert
+    # inside main() rather than anything resembling a cache problem.
+    # must-revalidate keeps the bytes on disk but checks the ETag, so a rebuild
+    # is picked up. A deployment serving a versioned path (/lowasm/<sha>/) should
+    # use immutable instead -- see docker/nginx-payload.conf.
     location ~ \.(wasm|data)$ {
         add_header Cross-Origin-Opener-Policy "same-origin" always;
         add_header Cross-Origin-Embedder-Policy "require-corp" always;
         add_header Cross-Origin-Resource-Policy "same-origin" always;
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Cache-Control "public, max-age=0, must-revalidate" always;
     }
-    location /cowasm-wopi/wasm/ {
+    location /docs/ {
         alias /docs/;
         add_header Cross-Origin-Opener-Policy "same-origin" always;
         add_header Cross-Origin-Embedder-Policy "require-corp" always;
@@ -83,7 +88,7 @@ server {
 NGINX
 
 echo "serving $SERVE_DIST on http://127.0.0.1:$PORT"
-[ -n "$DOCS" ] && echo "  documents from $DOCS:  http://127.0.0.1:$PORT/cool.html?WOPISrc=<file>"
+[ -n "$DOCS" ] && echo "  documents from $DOCS:  http://127.0.0.1:$PORT/lowasm-test.html?doc=<file>"
 exec docker run --rm -p "$PORT:80" \
     -v "$SERVE_DIST:/usr/share/nginx/html:ro" \
     "${docs_mount[@]}" \

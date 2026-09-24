@@ -39,6 +39,16 @@ echo "=== splash styling ==="
 "$LOWASM_ROOT/scripts/debrand.sh" "$DIST" || exit 1
 
 cp -f "$ONLINE_SRC/wasm/cool-payload-sw.js" "$DIST/"
+# Stamp the cache name with this build. The worker caches online.wasm and friends
+# under URLs that never change, so a fixed name serves the previous build's bytes
+# for ever -- new JS against an old engine, which fails in confusing ways (an
+# assert deep in main(), not an obvious "stale cache" message). The worker's
+# activate handler already deletes every cache whose name differs from the
+# current one, so bumping the name is all that is needed.
+sed -i "s/cool-payload-v1/cool-payload-$(date -u +%Y%m%d%H%M%S)/" "$DIST/cool-payload-sw.js"
+# The host-API test page. Not part of the engine, but shipped with it so a built
+# payload can be exercised the way a host uses it (see wasm/lowasm-test.html).
+cp -f "$ONLINE_SRC/wasm/lowasm-test.html" "$DIST/"
 
 if [ "${READER:-}" = 1 ]; then
   echo "=== font-subsetting soffice.data for a read-only viewer ==="

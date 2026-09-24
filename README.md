@@ -16,7 +16,7 @@ is not supported in this build.
 | Branding | blank by design — apply your own at source |
 | Warm engine reuse (many documents, one instance) | ⚠️ engine side works (2nd document in ~943 ms); the client-side swap wedges the browser main thread |
 | Read-only mode | ❌ documents open editable; saving POSTs back and has no receiver |
-| Document URL | ⚠️ hardcoded to `/cowasm-wopi/wasm/<name>` — due to become host-configurable |
+| Document input | ✅ host-supplied bytes — `window.lowasm.load(name, bytes)`; the engine performs no HTTP |
 | Embedding API | ⚠️ not yet stable (see below) |
 
 Payload: `online.wasm` ~176 MB, `soffice.data` ~103 MB (56 MB with `READER=1`),
@@ -99,7 +99,7 @@ An interrupted core build resumes: `make` is incremental.
 
 ```bash
 scripts/serve.sh build/online/browser/dist 18081 /path/to/documents
-# open http://127.0.0.1:18081/cool.html?WOPISrc=example.docx
+# open http://127.0.0.1:18081/lowasm-test.html?doc=example.docx
 ```
 
 Any host must send, on every response:
@@ -152,9 +152,14 @@ costs one Online relink, not a core rebuild.
 
 | | |
 |---|---|
-| `cool.html?WOPISrc=<name>` | first document, fetched from `/cowasm-wopi/wasm/<name>` |
-| `window.coolLoadDocument(name, kind)` | open another document on the warm engine; `kind` is `server` or `local` |
-| `window.coolDocumentLoadFailed(url, status)` | override to handle a failed fetch |
+| `window.lowasm.ready` | promise; resolves once the engine is up and waiting |
+| `window.lowasm.load(name, bytes, {canWrite})` | write bytes into the Emscripten filesystem and open them; resolves with `{docType, pages}` |
+| `window.lowasm.save()` | save; the bytes arrive via the `saved` event |
+| `window.lowasm.on(event, cb)` | `ready` \| `loaded` \| `saved` \| `error`; returns an unsubscribe function |
+| `window.coolConfig` | configure the engine without query parameters on the host's own URL |
+| `lowasm-test.html?doc=<name>` | a host page for testing, serving documents from `/docs/` |
+| `window.coolLoadDocument(desc)` | lower-level: open a document already in the filesystem (`file:///docs/x.odt`) |
+| `window.coolDocumentLoadFailed(url, status)` | override to handle a document that cannot be opened |
 | `?loglevel=information\|debug\|trace` | engine log level for this page load (default `warning`) |
 
 Collabora Online's host postMessage API (`Hide_Menu_Item`, `Hide_Button`, …) works
