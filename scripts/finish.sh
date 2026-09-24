@@ -73,6 +73,18 @@ META=$DIST/soffice.data.js.metadata
   exit 1
 }
 
+echo "=== recording the build id ==="
+# Which commit produced this payload. publish-ghcr.sh compares this with HEAD:
+# comparing mtimes instead cannot tell "built before these commits existed" from
+# "built from exactly this tree, then committed" -- and the second is the normal
+# order here (build, verify, commit), so a timestamp check refuses valid payloads.
+{
+  git -C "$LOWASM_ROOT" rev-parse HEAD 2>/dev/null || echo unknown
+  [ -n "$(git -C "$LOWASM_ROOT" status --porcelain -- online core scripts tools docker 2>/dev/null)" ] \
+    && echo dirty
+} > "$DIST/lowasm-build-id"
+echo "  $(tr '\n' ' ' < "$DIST/lowasm-build-id")"
+
 echo "=== stripping debug metadata ==="
 # The unstripped binary is kept: it is what makes an abort's stack trace
 # readable, by serving it in place of the stripped one.

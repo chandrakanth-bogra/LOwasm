@@ -43,15 +43,24 @@ IMAGE=${GHCR_IMAGE:-lowasm}
 TAG=${GHCR_TAG:-$(git rev-parse --short HEAD)}
 REPO="ghcr.io/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/$IMAGE"
 
-# A payload older than HEAD is the one failure mode worth refusing outright: the
-# tag would name a commit whose code is not in the image.
-head_time=$(git log -1 --format=%ct)
-dist_time=$(stat -c %Y "$SERVE_DIST/online.wasm")
-if [ "$dist_time" -lt "$head_time" ]; then
-  die "$SERVE_DIST/online.wasm is older than HEAD ($(git rev-parse --short HEAD)) -- rebuild before publishing"
+# Publishing a payload that does not match the tag is the one failure mode worth
+# refusing outright, so compare the build id finish.sh recorded with HEAD. An
+# mtime comparison was tried first and refused perfectly good payloads: building,
+# verifying, then committing leaves dist older than HEAD while containing exactly
+# that code.
+BUILD_ID_FILE=$SERVE_DIST/lowasm-build-id
+if [ ! -f "$BUILD_ID_FILE" ]; then
+  die "$SERVE_DIST has no lowasm-build-id -- it predates build-id recording; re-run scripts/finish.sh"
 fi
-[ -z "$(git status --porcelain -- online core scripts tools docker)" ] ||
-  echo "WARNING: tracked sources are modified; :$TAG will not match the committed tree"
+built_sha=$(head -1 "$BUILD_ID_FILE")
+head_sha=$(git rev-parse HEAD)
+if [ "$built_sha" != "$head_sha" ]; then
+  msg="payload was built from ${built_sha:0:9}, HEAD is ${head_sha:0:9} -- :$TAG would not match the image"
+  [ "${GHCR_ALLOW_STALE:-0}" = 1 ] || die "$msg (rebuild, or set GHCR_ALLOW_STALE=1 to publish anyway)"
+  echo "WARNING: $msg"
+fi
+grep -qx dirty "$BUILD_ID_FILE" &&
+  echo "WARNING: tracked sources were modified when this payload was built; :$TAG does not describe it exactly"
 
 # The build context is a directory holding the Dockerfile, its nginx config and
 # the payload. Three constraints shape how it is assembled:
