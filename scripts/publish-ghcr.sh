@@ -3,7 +3,13 @@
 #
 #   GHCR_TOKEN=<PAT with write:packages> scripts/publish-ghcr.sh [dist]
 #
-#   GHCR_OWNER   GitHub owner      (default: parsed from the origin remote)
+#   GHCR_OWNER   image owner, user or org (default: parsed from the origin remote)
+#   GHCR_USER    GitHub user to log in as (default: the origin remote's owner).
+#                Set this when GHCR_OWNER is an organisation: GHCR has no org
+#                login, so publishing to one means authenticating as a member
+#                whose PAT carries write:packages for it, e.g.
+#                  GHCR_OWNER=actorfield GHCR_USER=chandrakanth-bogra \
+#                  GHCR_TOKEN=<PAT> scripts/publish-ghcr.sh
 #   GHCR_IMAGE   image name        (default: lowasm)
 #   GHCR_TAG     primary tag       (default: the short HEAD sha)
 #   GHCR_LATEST  also tag :latest  (default: 1)
@@ -36,9 +42,16 @@ else
   die "cannot reach the docker daemon, and $(id -un) is not in the docker group"
 fi
 
-OWNER=${GHCR_OWNER:-$(git remote get-url origin 2>/dev/null |
-  sed -E 's#^git@github.com:#https://github.com/#; s#^https://github.com/##; s#/.*##')}
-[ -n "$OWNER" ] || die "cannot determine the GitHub owner -- set GHCR_OWNER"
+GIT_OWNER=$(git remote get-url origin 2>/dev/null |
+  sed -E 's#^git@github.com:#https://github.com/#; s#^https://github.com/##; s#/.*##')
+# OWNER names the image path and may be an organisation; USER authenticates and
+# must be a person. GHCR has no org login -- pushing to an org means signing in as
+# a member whose PAT carries write:packages for it, so these cannot be the same
+# value and conflating them fails with a confusing 403.
+OWNER=${GHCR_OWNER:-$GIT_OWNER}
+GHCR_USER=${GHCR_USER:-$GIT_OWNER}
+[ -n "$OWNER" ] || die "cannot determine the image owner -- set GHCR_OWNER"
+[ -n "$GHCR_USER" ] || die "cannot determine the GitHub user to log in as -- set GHCR_USER"
 IMAGE=${GHCR_IMAGE:-lowasm}
 TAG=${GHCR_TAG:-$(git rev-parse --short HEAD)}
 REPO="ghcr.io/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/$IMAGE"
@@ -92,8 +105,8 @@ if [ "${GHCR_PUSH:-1}" != 1 ]; then
 fi
 
 [ -n "${GHCR_TOKEN:-}" ] || die "GHCR_TOKEN is not set (needs a PAT with write:packages)"
-echo "=== logging in to ghcr.io as $OWNER ==="
-printf '%s' "$GHCR_TOKEN" | docker_run login ghcr.io -u "$OWNER" --password-stdin ||
+echo "=== logging in to ghcr.io as $GHCR_USER (publishing to $OWNER) ==="
+printf '%s' "$GHCR_TOKEN" | docker_run login ghcr.io -u "$GHCR_USER" --password-stdin ||
   die "docker login failed"
 
 for t in "$TAG" $([ "${GHCR_LATEST:-1}" = 1 ] && echo latest); do
