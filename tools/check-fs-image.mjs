@@ -29,8 +29,10 @@ const meta = JSON.parse(readFileSync(metaPath, "utf8"));
 const loader = readFileSync(loaderPath, "utf8");
 
 // Emitted as: Module['FS_createPath']("/parent", "name", true, true);
+// Linking with -sALLOW_MEMORY_GROWTH runs the JS through another pass that
+// rewrites the quotes to Module["FS_createPath"], so accept either.
 const created = new Set(["/"]);
-for (const m of loader.matchAll(/FS_createPath'?\]?\(\s*"([^"]*)"\s*,\s*"([^"]*)"/g)) {
+for (const m of loader.matchAll(/FS_createPath['"]?\]?\(\s*"([^"]*)"\s*,\s*"([^"]*)"/g)) {
   created.add((m[1] === "/" ? "" : m[1]) + "/" + m[2]);
 }
 
