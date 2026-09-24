@@ -319,6 +319,9 @@ m4_ifelse(MOBILEAPP, [true],
 m4_ifelse(MOBILEAPP,[true],
   <!-- This is for a mobile app so the script files are in the same folder -->
   m4_ifelse(EMSCRIPTENAPP, [true], [<script src="emscripten-module.js" defer></script>])
+  m4_dnl LOWASM: the host-facing API. Deferred like the others, and ahead of
+  m4_dnl bundle.js so window.lowasm exists before main.js runs.
+  m4_ifelse(EMSCRIPTENAPP, [true], [<script src="lowasm.js" defer></script>])
   m4_ifelse(BUNDLE, [], m4_foreachq([fileJS], [m4_include(COOL_JS.m4)], [<script src="fileJS" defer></script>]), [<script src="bundle.js" defer></script>]),
   m4_ifelse(BUNDLE, [], m4_foreachq([fileJS], [m4_include(COOL_JS.m4)],
         [<script src="%SERVICE_ROOT%/browser/%VERSION%/fileJS" defer></script>

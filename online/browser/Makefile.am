@@ -788,6 +788,10 @@ $(DIST_FOLDER)/emscripten-module.js: ../wasm/emscripten-module.js
 	@mkdir -p $(dir $@)
 	@cp $< $@
 
+$(DIST_FOLDER)/lowasm.js: ../wasm/lowasm.js
+	@mkdir -p $(dir $@)
+	@cp $< $@
+
 $(DIST_FOLDER)/emscripten-zetajs-example.js: $(abs_top_srcdir)/wasm/emscripten-zetajs-example.js
 	@mkdir -p $(dir $@)
 	@cp $< $@
@@ -802,6 +806,7 @@ $(DIST_FOLDER)/soffice%: ../wasm/soffice%
 
 WASM_FILES= \
 	$(DIST_FOLDER)/emscripten-module.js \
+	$(DIST_FOLDER)/lowasm.js \
 	$(DIST_FOLDER)/online.js \
 	$(DIST_FOLDER)/online.wasm \
 	$(DIST_FOLDER)/soffice.data \

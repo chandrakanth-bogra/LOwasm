@@ -301,7 +301,13 @@ class InitializerBase {
 	}
 
 	initiateCoolParams() {
-		const gls = window.location.search;
+		// LOWASM: window.coolConfig lets a host page configure the engine without
+		// putting parameters in its own URL -- an embedded viewer has no business
+		// dictating the application's route. The query string remains the
+		// fallback, so a standalone page keeps working unchanged.
+		const gls = typeof window.coolConfig === 'object' && window.coolConfig !== null
+			? '?' + new URLSearchParams(window.coolConfig).toString()
+			: window.location.search;
 
 		const coolParams = { p: new URLSearchParams(gls.slice(gls.lastIndexOf('?') + 1)) };
 
@@ -523,10 +529,11 @@ class EMSCRIPTENAppInitializer extends MobileAppInitializer {
 
 		// LOWASM: open another document on the same warm engine, instead of
 		// tearing down the module and paying the wasm compile + MEMFS unpack
-		// again. See wasm/wasmapp.cpp. `kind` is 'server' (fetched through the
-		// /cowasm-wopi/ service worker) or 'local' (already in the Emscripten FS).
-		// ccall, not _cool_load_document, so the argument strings are freed for us.
-		window.coolLoadDocument = function(desc, kind) {
+		// again. See wasm/wasmapp.cpp. `desc` is a file:// URL (or plain path)
+		// naming a document already written into the Emscripten filesystem --
+		// window.lowasm.load() puts it there; the engine fetches nothing.
+		// ccall, not _cool_load_document, so the argument string is freed for us.
+		window.coolLoadDocument = function(desc) {
 			// Only the load flag is cleared here. Rebuilding the document layer
 			// for the new type is done in Socket.ts's status handler, where the
 			// new type is actually known -- tearing it down from out here leaves
@@ -540,8 +547,7 @@ class EMSCRIPTENAppInitializer extends MobileAppInitializer {
 			if (map)
 				map.fire('docloaded', { status: false });
 
-			Module.ccall('cool_load_document', null, ['string', 'string'],
-				[kind || 'server', desc]);
+			Module.ccall('cool_load_document', null, ['string'], [desc]);
 		};
 
 		// Overridable by the host page; the engine calls this instead of exiting

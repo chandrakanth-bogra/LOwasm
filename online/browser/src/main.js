@@ -12,7 +12,7 @@
 
 /* global globalThis UIManager */
 /* global errorMessages accessToken accessTokenTTL noAuthHeader accessHeader createOnlineModule */
-/* global app $ host idleTimeoutSecs outOfFocusTimeoutSecs _ LocaleService LayoutingService */
+/* global app host idleTimeoutSecs outOfFocusTimeoutSecs _ LocaleService LayoutingService */
 /* global ServerConnectionService createEmscriptenModule */
 /*eslint indent: [error, "tab", { "outerIIFEBody": 0 }]*/
 
@@ -87,6 +87,9 @@ if (!window.L.Browser.cypressTest)
 
 map.uiManager.initializeBasicUI();
 
+// LOWASM: the Emscripten build boots with no document and waits for the host to
+// call window.lowasm.load(), so "no document named in the URL" is the normal
+// state there rather than a misconfiguration worth a modal.
 if (wopiSrc === '' && filePath === '' && !window.ThisIsAMobileApp) {
 	map.uiManager.showInfoModal('wrong-wopi-src-modal', '', errorMessages.wrongwopisrc, '', _('OK'), null, false);
 }
@@ -97,16 +100,18 @@ if (host === '' && !window.ThisIsAMobileApp) {
 app.idleHandler.map = map;
 
 if (window.ThisIsTheEmscriptenApp) {
-	var docParamsString = $.param(docParams);
-	// The URL may already contain a query (e.g., 'http://server.tld/foo/wopi/files/bar?desktop=baz') - then just append more params
-	var docParamsPart = docParamsString ? (docURL.includes('?') ? '&' : '?') + docParamsString : '';
-	var encodedWOPI = encodeURIComponent(docURL + docParamsPart);
-
-	globalThis.Module = createEmscriptenModule(
-		isWopi ? 'server' : 'local', isWopi ? encodedWOPI : docURL);
-	globalThis.Module.onRuntimeInitialized = function() {
-		map.loadDocument(global.socket);
-	};
+	// LOWASM: no document descriptor here. The engine no longer fetches anything,
+	// so there is nothing to hand it at boot -- window.lowasm.load(name, bytes)
+	// writes the document into the Emscripten filesystem and opens it whenever
+	// the host has the bytes.
+	globalThis.Module = createEmscriptenModule();
+	// LOWASM: deliberately no map.loadDocument() here. It connects the socket,
+	// and Socket.ts's open handler immediately sends 'load url=' + options.doc --
+	// which at boot is empty. WSD accepts that (loadDocument only needs two
+	// tokens) and the session's docURL stays empty, after which ClientSession
+	// refuses every later command with kind=nodocloaded: no tiles, no save, while
+	// the engine renders happily into a void. window.lowasm.load() connects
+	// instead, once options.doc names a real document.
 	createOnlineModule(globalThis.Module);
 } else {
 	map.loadDocument(global.socket);
