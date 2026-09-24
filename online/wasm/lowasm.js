@@ -143,6 +143,15 @@
 				FS.writeFile(path, data);
 				currentName = name;
 
+				// Declare read-only before connecting: Socket.ts puts `readonly=1`
+				// on the load message when app.isReadOnly(), which is what makes
+				// the kit set the LOK view read-only. Setting it afterwards would
+				// only affect the UI. cool.html?permission=readonly reaches the
+				// same flag via main.js, so the URL flag and this option are one
+				// mechanism rather than two.
+				if (opts.canWrite === false)
+					global.app.setPermission('readonly');
+
 				pendingLoad = awaitDocLoaded(name);
 				announceDocument(name, opts.canWrite !== false);
 

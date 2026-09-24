@@ -388,6 +388,17 @@ class Socket {
 		if (String.locale) {
 			msg += ' lang=' + String.locale;
 		}
+		// LOWASM: read-only has to be declared at load time to be enforced at all.
+		// parseDocOptions() reads this token into the session, and the kit then
+		// calls setViewReadOnly() on the LOK view -- that is what refuses edits.
+		// Without it, ?permission=readonly only hides UI and the document stays
+		// editable. Comments and redlines stay off with it: app.setPermission
+		// clears editComment/allowManageRedlines, and the kit only re-enables them
+		// for a session that explicitly allows them. Download and Export are
+		// unaffected -- downloadas is forwarded to the kit regardless.
+		if (app.isReadOnly()) {
+			msg += ' readonly=1';
+		}
 		if (window.deviceFormFactor) {
 			msg += ' deviceFormFactor=' + window.deviceFormFactor;
 		}

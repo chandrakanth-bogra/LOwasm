@@ -56,11 +56,17 @@
 
       var frame = document.getElementById('engine');
 
-      // Pass ?loglevel= through to the engine, so a diagnostic run can raise the
-      // engine's log level (it ships at "error") without a rebuild. The src is
-      // set here rather than in the markup so the load handler is attached first.
-      var loglevel = params.get('loglevel');
-      var engineSrc = 'cool.html' + (loglevel ? '?loglevel=' + encodeURIComponent(loglevel) : '');
+      // Forward engine-bound params: loglevel raises the engine's log level (it
+      // ships at "error") without a rebuild, and permission=readonly is what puts
+      // the engine into enforced viewer mode. Everything else -- notably doc --
+      // belongs to this page, not the engine. The src is set below rather than in
+      // the markup so the load handler is attached first.
+      var forwarded = ['loglevel', 'permission'].reduce(function (acc, key) {
+        var value = params.get(key);
+        if (value) acc.push(key + '=' + encodeURIComponent(value));
+        return acc;
+      }, []);
+      var engineSrc = 'cool.html' + (forwarded.length ? '?' + forwarded.join('&') : '');
 
       frame.addEventListener('load', function () {
         var win = frame.contentWindow;
