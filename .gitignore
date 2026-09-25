@@ -1,1 +1,5 @@
 /build/
+
+# Build transcripts: scripts/build.sh and scripts/finish.sh are run redirected
+# into a log at the repo root, and the payload they produce is what matters.
+*.log

@@ -201,17 +201,17 @@ void saveToServer() {
     {
         auto const f = std::unique_ptr<FILE, FileClose>(std::fopen(path, "r"));
         if (f.get() == nullptr) {
-            LOG_WRN("Failed to open " << path << " for reading"); //TODO
+            LOG_WRN("Failed to open " << path << " for reading");
             return;
         }
         int e = std::fseek(f.get(), 0, SEEK_END);
         if (e != 0) {
-            LOG_WRN("Failed to seek in " << path); //TODO
+            LOG_WRN("Failed to seek in " << path);
             return;
         }
         n = std::ftell(f.get());
         if (n == -1) {
-            LOG_WRN("Failed to get size of " << path); //TODO
+            LOG_WRN("Failed to get size of " << path);
             return;
         }
         buf = std::make_unique<char[]>(n);
@@ -219,7 +219,7 @@ void saveToServer() {
         std::size_t n2 = std::fread(buf.get(), 1, n, f.get());
         assert(n >= 0);
         if (n2 != static_cast<unsigned long>(n)) {
-            LOG_WRN("Failed to get read " << path); //TODO
+            LOG_WRN("Failed to read " << path);
             return;
         }
     }
