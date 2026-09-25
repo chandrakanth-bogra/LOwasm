@@ -10,10 +10,9 @@
 #
 # The engine does not fetch documents -- a host hands it bytes via
 # window.lowasm.load(). docs-dir is served at /docs/ for lowasm-test.html, which
-# plays the part of that host. cool.html on its own opens no document.
+# plays that host; cool.html on its own opens no document.
 #
-# Cross-origin isolation is mandatory: the module is threaded WASM and needs
-# SharedArrayBuffer, so COOP/COEP go on every response. .wasm must be
+# COOP/COEP are mandatory: threaded WASM needs SharedArrayBuffer. .wasm must be
 # application/wasm or the browser refuses to stream-compile it.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
@@ -48,14 +47,10 @@ server {
         add_header Cross-Origin-Resource-Policy "same-origin" always;
         add_header Cache-Control "no-store" always;
     }
-    # The ~280 MB of wasm + filesystem image dominate load, so caching them is
-    # tempting -- but these paths are not content-hashed, and `immutable` made a
-    # rebuilt engine unreachable even through a hard reload: the browser kept the
-    # previous online.wasm while loading the new JS, which fails as an assert
-    # inside main() rather than anything resembling a cache problem.
-    # must-revalidate keeps the bytes on disk but checks the ETag, so a rebuild
-    # is picked up. A deployment serving a versioned path (/lowasm/<sha>/) should
-    # use immutable instead -- see docker/nginx-payload.conf.
+    # Not immutable: these paths are not content-hashed, so it makes a rebuilt
+    # engine unreachable even through a hard reload. must-revalidate keeps the
+    # bytes but checks the ETag. Versioned deployments may use immutable -- see
+    # docker/nginx-payload.conf.
     location ~ \.(wasm|data)$ {
         add_header Cross-Origin-Opener-Policy "same-origin" always;
         add_header Cross-Origin-Embedder-Policy "require-corp" always;

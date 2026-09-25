@@ -35,10 +35,8 @@
 
 int coolwsd_server_socket_fd = -1;
 
-// The document currently open, as written into the Emscripten filesystem by the
-// host (see lowasm.js). documentPath is the filesystem path, documentName the
-// bare file name handed back to the host with the saved bytes, and fileURL the
-// file:// form COOLWSD is given. All three are empty until the first load.
+// The document currently open, written into the Emscripten filesystem by the
+// host (see lowasm.js). Empty until the first load.
 static std::string documentPath;
 static std::string documentName;
 static std::string fileURL;
@@ -61,11 +59,9 @@ static int closeNotificationPipeForForwardingThread[2] = {-1, -1};
 // to wait for that run to finish.
 static std::mutex coolwsdRunningMutex;
 
-// The next document to open, as a file:// URL. Written from the JS thread by
-// cool_load_document, read by the engine thread, so it needs the mutex -- the
-// Android equivalent assigns its fileURL unsynchronised and gets away with it.
-// The optional is the "is one waiting" flag; there is nothing else to keep in
-// sync with it.
+// The next document to open, as a file:// URL. Written from the JS thread, read
+// from the engine thread, so the mutex is required. The optional doubles as the
+// "one is waiting" flag.
 static std::mutex pendingMutex;
 static std::condition_variable pendingCv;
 static std::optional<std::string> pendingDocument;
@@ -237,15 +233,12 @@ void saveToServer() {
     LOG_TRC("Saved " << path << " (" << n << " bytes), handed to coolDocumentSaved for <" << documentName << '>');
 }
 
-// LOWASM: tell JS a document could not be opened. Before warm reuse this path
-// was std::exit(EXIT_FAILURE), which was survivable only because the instance
-// was being thrown away with the document. Now the instance is shared, so one
-// bad document must not take the engine and every later document down with it.
+// Tell JS a document could not be opened. Must not exit: the instance is shared
+// across documents, so one bad document cannot take the engine down with it.
 static void reportLoadFailure(const std::string& url, int status)
 {
-    // The message itself is LOG_ERR'd above, and global.js always installs a
-    // coolDocumentLoadFailed default, so there is deliberately no fallback
-    // message here -- a second copy would only drift from the JS one.
+    // global.js always installs a coolDocumentLoadFailed default, so there is
+    // deliberately no fallback message here.
     LOG_ERR("Opening " << url << " failed, status: " << status);
     MAIN_THREAD_EM_ASM({
         if (typeof globalThis.coolDocumentLoadFailed === 'function')
@@ -263,12 +256,8 @@ static std::string stripFileScheme(const std::string& url)
 
 /// Point fileURL at the requested document, which the host has already written
 /// into the Emscripten filesystem. Returns false if it is not there, in which
-/// case the engine stays up and simply waits for the next request.
-///
-/// LOWASM: this used to GET /cowasm-wopi/wasm/<name> with emscripten_fetch. The
-/// engine no longer does HTTP at all -- fetching is the host's business, which
-/// is what lets the payload be served from anywhere (a CDN, a versioned path)
-/// while documents come from somewhere else entirely, with their own auth.
+/// case the engine stays up and waits for the next request. The engine performs
+/// no HTTP of its own; fetching is the host's business.
 static bool prepareDocument(const std::string& desc)
 {
     // The module outlives the document, so without this the previous one's bytes
@@ -427,11 +416,8 @@ int main(int argc, char* argv_main[])
                                      LOG_TRC_NOFILE(line);
                                  });
 
-    // LOWASM: the module boots with no document and waits. Upstream asserted
-    // argc == 3 and opened argv[1]/argv[2] here, which forced every embedder to
-    // know its first document before the engine existed. The host now calls
-    // lowasm.load() -> cool_load_document() whenever it has bytes, so a
-    // descriptor on argv is optional and only kept for a standalone page.
+    // The module boots with no document and waits for lowasm.load(). A
+    // descriptor on argv is optional, and only kept for a standalone page.
     if (argc > 1 && argv_main[1] != nullptr && *argv_main[1] != '\0')
         cool_load_document(argv_main[1]);
 

@@ -64,9 +64,7 @@
 
 	// What CheckFileInfo would have provided in a WOPI deployment. There is no
 	// WOPI in this build (WopiStorage is compiled out), but the client's toolbar,
-	// title and Save As / Export naming all read these fields, so synthesize
-	// them: Control.DocumentNameInput, Control.TopToolbar, Control.Toolbar,
-	// Control.PresentationBar and Map.WOPI._setWopiProps all listen for this.
+	// title and Save As / Export naming all read these fields, so synthesize them.
 	function announceDocument(name, canWrite) {
 		var m = map();
 		if (!m)
@@ -103,11 +101,9 @@
 	}
 
 	function toBytes(bytes) {
-		// instanceof is per-realm, and the bytes usually come from another one:
-		// a host page that frames cool.html builds its ArrayBuffer with *its*
-		// window's constructor, so `bytes instanceof ArrayBuffer` is false here
-		// however good the buffer is. Test the brand instead -- isView() and the
-		// toString tag both read internal slots, which cross realms intact.
+		// instanceof is per-realm, so a framing host's ArrayBuffer fails it here.
+		// Test the brand instead: isView() and the toString tag read internal
+		// slots, which cross realms intact.
 		if (ArrayBuffer.isView(bytes))
 			return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
@@ -143,24 +139,18 @@
 				FS.writeFile(path, data);
 				currentName = name;
 
-				// Declare read-only before connecting: Socket.ts puts `readonly=1`
-				// on the load message when app.isReadOnly(), which is what makes
-				// the kit set the LOK view read-only. Setting it afterwards would
-				// only affect the UI. cool.html?permission=readonly reaches the
-				// same flag via main.js, so the URL flag and this option are one
-				// mechanism rather than two.
+				// Must precede the connect: Socket.ts only puts `readonly=1` on
+				// the load message, and that is what makes the kit set the LOK
+				// view read-only. Setting it later affects the UI alone.
 				if (opts.canWrite === false)
 					global.app.setPermission('readonly');
 
 				pendingLoad = awaitDocLoaded(name);
 				announceDocument(name, opts.canWrite !== false);
 
-				// The engine opens the file; the client has to be told about it
-				// separately. Socket.ts sends 'load url=' + map.options.doc when
-				// the socket opens, and WSD's ClientSession refuses every command
-				// (tiles included) until that URL is non-empty -- so set it first,
-				// then connect on the first load. Later loads reuse the warm
-				// engine and need no reconnect.
+				// Set map.options.doc before connecting: Socket.ts sends
+				// 'load url=' + that value, and WSD refuses every command (tiles
+				// included) while it is empty. Later loads reuse the connection.
 				var m = map();
 				if (m)
 					m.options.doc = 'file://' + path;

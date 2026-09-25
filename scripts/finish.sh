@@ -39,15 +39,12 @@ echo "=== splash styling ==="
 "$LOWASM_ROOT/scripts/debrand.sh" "$DIST" || exit 1
 
 cp -f "$ONLINE_SRC/wasm/cool-payload-sw.js" "$DIST/"
-# Stamp the cache name with this build. The worker caches online.wasm and friends
-# under URLs that never change, so a fixed name serves the previous build's bytes
-# for ever -- new JS against an old engine, which fails in confusing ways (an
-# assert deep in main(), not an obvious "stale cache" message). The worker's
-# activate handler already deletes every cache whose name differs from the
-# current one, so bumping the name is all that is needed.
+# Stamp the cache name per build: the URLs never change, so a fixed name serves
+# the previous build's bytes for ever. The worker's activate handler drops every
+# cache whose name differs from the current one, so bumping the name suffices.
 sed -i "s/cool-payload-v1/cool-payload-$(date -u +%Y%m%d%H%M%S)/" "$DIST/cool-payload-sw.js"
-# The host-API test page. Not part of the engine, but shipped with it so a built
-# payload can be exercised the way a host uses it (see wasm/lowasm-test.html).
+# The host-API test page: not part of the engine, but shipped with it so a built
+# payload can be exercised the way a host uses it.
 cp -f "$ONLINE_SRC/wasm/lowasm-test.html" "$DIST/"
 
 if [ "${READER:-}" = 1 ]; then
@@ -74,10 +71,9 @@ META=$DIST/soffice.data.js.metadata
 }
 
 echo "=== recording the build id ==="
-# Which commit produced this payload. publish-ghcr.sh compares this with HEAD:
-# comparing mtimes instead cannot tell "built before these commits existed" from
-# "built from exactly this tree, then committed" -- and the second is the normal
-# order here (build, verify, commit), so a timestamp check refuses valid payloads.
+# Which commit produced this payload; publish-ghcr.sh compares it with HEAD.
+# Must be the commit, not an mtime: building then committing is the normal order
+# here, and a timestamp check reads that as stale and refuses valid payloads.
 {
   git -C "$LOWASM_ROOT" rev-parse HEAD 2>/dev/null || echo unknown
   [ -n "$(git -C "$LOWASM_ROOT" status --porcelain -- online core scripts tools docker 2>/dev/null)" ] \
