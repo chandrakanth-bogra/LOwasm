@@ -84,10 +84,6 @@
 #endif
 #endif
 
-#if defined __EMSCRIPTEN__
-#include <emscripten/console.h>
-#endif
-
 // for version info
 #include <Poco/Version.h>
 #if ENABLE_SSL
@@ -311,8 +307,6 @@ namespace Util
 #elif defined IOS
         [[NSThread currentThread] setName:[NSString stringWithUTF8String:ThreadName]];
         LOG_INF("Thread " << getThreadId() << ") is now called [" << s << ']');
-#elif defined __EMSCRIPTEN__
-        emscripten_console_logf("COOL thread name: \"%s\"", s.c_str());
 #endif
 
         // Emit a metadata Trace Event identifying this thread. This will invoke a different function

@@ -420,8 +420,6 @@ window.L.CalcTileLayer = window.L.CanvasTileLayer.extend({
 	},
 
 	_onStatusMsg: function (textMsg) {
-		console.log('DEBUG: onStatusMsg: ' + textMsg);
-
 		const statusJSON = JSON.parse(textMsg.replace('status:', '').replace('statusupdate:', ''));
 
 		if (statusJSON.width && statusJSON.height && this._documentInfo !== textMsg) {
@@ -822,8 +820,6 @@ window.L.CalcTileLayer = window.L.CanvasTileLayer.extend({
 		}
 
 		this._addRemoveGroupSections();
-
-		console.log('debug: got sheetGeometry: this._rtlParts = ' + this._rtlParts + ' this._selectedPart = ' + this._selectedPart);
 
 		this._adjustCanvasSectionsForLayoutChange();
 
